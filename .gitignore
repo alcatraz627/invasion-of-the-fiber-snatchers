@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+bun.lockb
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+._*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Build
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Testing scratch
+.fiber-snatcher/
+.test-target/
+
+# Claude Code
+**/.playwright-mcp/
+_*.claude.md
+.claude/_*.claude.md

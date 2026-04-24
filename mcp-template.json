@@ -1,0 +1,17 @@
+{
+  "_comment": "Template merged by `fiber-snatcher init` into target project's .mcp.json. Versions pinned per global CLAUDE.md policy — update by running `npm view <pkg> version` and bumping.",
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.43"]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@0.8.0"]
+    },
+    "next-devtools": {
+      "command": "npx",
+      "args": ["-y", "next-devtools-mcp@0.3.0"]
+    }
+  }
+}
