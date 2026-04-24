@@ -27,7 +27,7 @@ export async function run(args: string[]): Promise<Result> {
   const sock = controlSocketPath(cfg);
 
   let action: Record<string, unknown>;
-  if (positional.length === 0) {
+  if (positional.length === 0 || positional[0] === "list") {
     action = { op: "list", filter };
   } else if (positional.length === 1) {
     action = { op: "get", atom: positional[0] };

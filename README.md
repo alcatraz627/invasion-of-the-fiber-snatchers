@@ -129,11 +129,15 @@ Fiber Snatcher closes the gaps with a tiny runtime inject, a local-only auth-byp
 | `fiber-snatcher stop`           | Graceful shutdown (browser, daemon, socket)                               |
 | `fiber-snatcher status`         | Is the daemon running? Current URL, adapters, recent log sample           |
 | `fiber-snatcher doctor`         | Probe battery — each step reported independently                          |
-| `fiber-snatcher state [sel]`    | React state/props/hooks for fiber at CSS selector                         |
+| `fiber-snatcher state [sel]`    | React state/props/hooks for fiber at CSS selector (flags: `--full`, `--shallow`) |
 | `fiber-snatcher dispatch`       | Pipe JSON on stdin; routed through `__snatcher__.dispatch`                |
 | `fiber-snatcher atoms [name]`   | Jotai-aware: list / get / set atoms by `debugLabel`                       |
 | `fiber-snatcher queries [sub]`  | TanStack Query: list / get / invalidate / refetch / reset / setData       |
-| `fiber-snatcher eval <file>`    | Evaluate a TS file in page context (escape hatch, requires `--yes-i-know`) |
+| `fiber-snatcher click <sel>`    | Playwright click (real input pipeline, fires React events)                |
+| `fiber-snatcher fill <sel> <v>` | Playwright fill — dispatches input+change with bubbling                   |
+| `fiber-snatcher press <key>`    | Keyboard press (`--selector` to focus first)                              |
+| `fiber-snatcher navigate <url>` | `page.goto`; relative paths resolve against devUrl                        |
+| `fiber-snatcher eval <file>`    | TS-aware: transpiles + returns last expression (`--yes-i-know`)          |
 | `fiber-snatcher shoot [sel]`    | Screenshot to `.fiber-snatcher/shots/`                                    |
 | `fiber-snatcher errors`         | Grouped error digest over time window (default 10m)                       |
 | `fiber-snatcher logs`           | Tail the unified JSONL stream (`-f`, `--source`, `--level`)               |

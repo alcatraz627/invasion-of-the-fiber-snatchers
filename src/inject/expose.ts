@@ -40,9 +40,11 @@ export type LogEntry = {
   corr?: string;
 };
 
+export type StateOpts = { full?: boolean; shallow?: boolean };
+
 export type SnatcherApi = {
   version: string;
-  state(selector?: string): unknown;
+  state(selector?: string, opts?: StateOpts): unknown;
   /**
    * Routes an action through a registered adapter. Awaits the adapter's return
    * value (TanStack Query / async adapters return promises) and passes it
@@ -95,20 +97,31 @@ function extractHooks(fiber: Fiber | null): unknown[] {
   return out;
 }
 
-function safeSnapshot(v: unknown, depth = 0): unknown {
-  if (depth > 4) return "[depth-limited]";
+/** React-internal keys that dominate state snapshots but carry no app signal. */
+const REACT_INTERNAL_KEYS = new Set([
+  "_owner", "_store", "$$typeof", "_source",
+  "debugTask", "debugStack", "debugLocation", "debugInfo",
+  "_debugSource", "_debugOwner", "_debugStack", "_debugHookTypes",
+  "ref", "key",                // ref and key rarely useful in fiber snapshots
+]);
+
+function safeSnapshot(v: unknown, depth = 0, opts?: { maxDepth?: number; includeInternals?: boolean }): unknown {
+  const maxDepth = opts?.maxDepth ?? 4;
+  const includeInternals = opts?.includeInternals ?? false;
+  if (depth > maxDepth) return "[depth-limited]";
   if (v === null || v === undefined) return v;
   const t = typeof v;
   if (t === "function") return `[Function ${(v as Function).name || "anonymous"}]`;
   if (t === "symbol") return v.toString();
   if (t !== "object") return v;
   if (v instanceof Date) return v.toISOString();
-  if (Array.isArray(v)) return v.slice(0, 50).map((x) => safeSnapshot(x, depth + 1));
+  if (Array.isArray(v)) return v.slice(0, 50).map((x) => safeSnapshot(x, depth + 1, opts));
   try {
     const out: Record<string, unknown> = {};
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
       if (k.startsWith("__")) continue;
-      out[k] = safeSnapshot(val, depth + 1);
+      if (!includeInternals && REACT_INTERNAL_KEYS.has(k)) continue;
+      out[k] = safeSnapshot(val, depth + 1, opts);
     }
     return out;
   } catch {
@@ -123,10 +136,25 @@ function install() {
   const adapters = new Map<string, Adapter>();
   const logs: LogEntry[] = [];
 
+  // Sink state: UNKNOWN → probed once on first log → AVAILABLE or DISABLED.
+  // Once DISABLED we never fetch again; eliminates the 404 spam when the
+  // optional log sink route isn't scaffolded in the host project.
+  let sinkState: "unknown" | "available" | "disabled" = "unknown";
+
   function pushLog(entry: LogEntry) {
     logs.push(entry);
     if (logs.length > MAX_LOGS) logs.shift();
-    // best-effort forward to server sink
+    if (sinkState === "disabled") return;
+    if (sinkState === "unknown") {
+      sinkState = "probing" as any;
+      fetch("/_fs/log", { method: "HEAD" })
+        .then((r) => {
+          sinkState = r.status === 404 ? "disabled" : "available";
+        })
+        .catch(() => { sinkState = "disabled"; });
+      return; // first call: skip the POST so we don't double-404
+    }
+    if (sinkState !== "available") return;
     try {
       fetch("/_fs/log", {
         method: "POST",
@@ -186,7 +214,11 @@ function install() {
 
   const api: SnatcherApi = {
     version: RUNTIME_VERSION,
-    state(selector?: string) {
+    state(selector?: string, opts?: StateOpts) {
+      const snapOpts = {
+        includeInternals: opts?.full === true,
+        maxDepth: opts?.shallow ? 2 : 4,
+      };
       const root = selector ? document.querySelectorAll(selector) : [document.body];
       if (selector) {
         if (root.length === 0) throw new Error(`selector matched 0 elements: ${selector}`);
@@ -206,16 +238,16 @@ function install() {
         if (isComponent && hasState) {
           walked.push({
             component: displayName(fiber.type),
-            state: safeSnapshot(fiber.memoizedState),
-            props: safeSnapshot(fiber.memoizedProps),
-            hooks: hooks.map((h) => safeSnapshot(h)),
+            state: safeSnapshot(fiber.memoizedState, 0, snapOpts),
+            props: safeSnapshot(fiber.memoizedProps, 0, snapOpts),
+            hooks: hooks.map((h) => safeSnapshot(h, 0, snapOpts)),
           });
         }
         fiber = fiber.return ?? null;
       }
       return {
         selector: selector ?? "<body>",
-        domProps: safeSnapshot(getPropsFromNode(el)),
+        domProps: safeSnapshot(getPropsFromNode(el), 0, snapOpts),
         ancestors: walked,
         page: location.pathname,
       };

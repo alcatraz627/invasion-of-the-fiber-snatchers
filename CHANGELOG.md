@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.0] — 2026-04-24
+
+### From the V1.1 integration shakedown — eval becomes a query, drive commands land, state trims noise
+
+**Decision:** eval is now Path A — a query primitive. Agents write TS by reflex, so the `.ts` suggestion in help text now actually works.
+
+**New — drive commands (feedback #6):**
+- `click <selector>` — Playwright click through the real input pipeline (React synthetic events fire correctly).
+- `fill <selector> <value>` — sets value and dispatches `input`/`change` with bubbling so React controlled inputs pick it up.
+- `press <key> [--selector <sel>]` — keyboard press, Playwright notation (`Enter`, `Shift+Tab`, `Meta+A`). With `--selector` focuses the element first; without, acts on current focus.
+- `navigate <url-or-path>` — `page.goto`; relative paths resolve against the daemon's devUrl. Replaces the `eval "location.href = …"` antipattern that nuked any window-installed trace.
+
+**Changed — eval is now a query (feedback #4, #5):**
+- `.ts` source is transpiled via `Bun.Transpiler` before evaluation — no more `Unexpected token ':'` on type annotations.
+- The last expression is returned as the result `data` (or use explicit `return x;` at the top level). Previously the value was swallowed and agents had to exfiltrate via `console.log("PREFIX:…") + grep`.
+- Scripts still run in an async IIFE so `await` at the top level works.
+- Pure side-effect scripts (no trailing expression) return `undefined` cleanly.
+
+**Changed — `state` output now trims React internals by default (feedback #7):**
+- Keys like `_owner`, `_store`, `$$typeof`, `debugTask`, `debugStack`, `debugLocation`, `debugInfo`, `_debugSource` are stripped from snapshots. Typical output dropped from ~100KB → ~5KB on a real app.
+- `--full` flag brings them back for cases where you *do* want React internals.
+- `--shallow` caps snapshot depth at 2 for very nested trees.
+
+**Changed — log sink 404 probe (feedback #9):**
+- On the first `.log()` call the runtime does `HEAD /_fs/log` once. If it's 404, the sink is marked disabled and no further POSTs fire. Eliminates the network-panel noise when the optional sink route isn't wired.
+
+**Fixed — `queries list` / `atoms list` accepted (feedback #2):**
+- Both CLIs now accept `list` as a no-op subcommand, matching the help text. Agent muscle-memory `<cmd> list` no longer crashes.
+
+**Fixed — help output column alignment (feedback #13):**
+- Re-laid out as LIFECYCLE / INSPECT / DRIVE / CAPTURE / CARE sections. No more overflow.
+
+**Obsolete — eval-via-console-log workaround:**
+- Removed from the CLAUDE.md operating rules. Use the new return-value channel.
+
+**Migration from 0.2.x:** `git pull && bash scripts/install.sh`. Runtime version is now `0.3.0` — re-run `fiber-snatcher init --force` in any initialized target project to copy the new `expose.ts` (with React-internal stripping + sink probe). Existing adapter files don't need re-copying.
+
 ## [0.2.1] — 2026-04-24
 
 ### Bug fixes from first real-app shakedown

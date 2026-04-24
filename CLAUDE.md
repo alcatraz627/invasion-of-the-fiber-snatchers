@@ -74,11 +74,26 @@ fiber-snatcher stop           # if you started it; not required if the user alre
 - `fiber-snatcher queries setData '["user",1]' '{"name":"X"}'` → overwrite cache entry. Returns `{previous, next}`.
 - QueryKeys must be valid JSON arrays — quote strings inside: `'["users","me"]'` not `["users","me"]`.
 
-### `eval <file> --yes-i-know`
+### `eval <file> --yes-i-know` — V0.3.0+ is a query primitive
 
-- Use only when `state` / `dispatch` can't express what you need.
-- Write the snippet to a file first; this keeps it reviewable.
-- It runs `new Function()` in the page — full DOM/window access. Don't use for anything you could do via the snatcher API.
+- Write a `.ts` or `.js` file; the last expression is returned as `data`. TS syntax is transpiled via Bun before running. Explicit `return x;` at top level also works.
+- Example:
+  ```sh
+  echo '({ title: document.title, pathname: location.pathname })' > /tmp/t.ts
+  fiber-snatcher eval /tmp/t.ts --yes-i-know --json
+  # → data: { title: "My App", pathname: "/dashboard" }
+  ```
+- Async allowed: `await fetch("/api/x").then(r => r.json())` works because the script body is wrapped in an async IIFE.
+- Pure side-effect scripts (no trailing expression) return `undefined` — use `state`/`atoms`/`queries` for reads instead when they fit.
+
+### Drive commands (V0.3.0+)
+
+Instead of eval-based clicks/navigation, use these. They go through Playwright's real input pipeline so React synthetic events fire correctly.
+
+- `fiber-snatcher click <selector>` — single click.
+- `fiber-snatcher fill <selector> <value>` — sets value + dispatches the React-expected events.
+- `fiber-snatcher press <key> [--selector <sel>]` — Playwright keyboard notation ("Enter", "Shift+Tab", "Meta+A"). Without `--selector`, acts on the currently focused element.
+- `fiber-snatcher navigate <url-or-path>` — page.goto; relative paths resolved against the daemon's devUrl. Use this instead of `location.href = …` via eval — real navigation, awaits DOMContentLoaded.
 
 ### `shoot [selector] --name <tag>`
 

@@ -150,7 +150,19 @@ All JSON keys/values must be valid JSON — quote strings inside arrays.
 
 ## 3. Wire auth bypass
 
-Each project decides how. The rule is: in dev, if the request has header `X-Fiber-Snatcher-Key: <your key>`, treat the request as authenticated. Read the key from `.fiber-snatcher/auth/dev-key` at runtime — **do not hardcode**.
+### Decision tree — pick a pattern before writing code
+
+```
+Does your app have auth?
+├── No ───────────────────────────────────────────────── Skip this section entirely (Pattern C below).
+├── Simple cookie/token, no session enrichment ────────── Pattern A (existing middleware/proxy) or B (NextAuth callback).
+├── Enriched session (role/team/permissions from DB,
+│   enforced in signIn callback) ──────────────────────── Pattern D — persistent profile (recommended).
+└── CI / headless runs / frequent profile wipes ──────── Pattern B with a real DB user lookup,
+                                                          or Pattern D with a committed storage-state snapshot.
+```
+
+The rule shared by patterns A/B: in dev, if the request has header `X-Fiber-Snatcher-Key: <your key>`, treat the request as authenticated. Read the key from `.fiber-snatcher/auth/dev-key` at runtime — **do not hardcode**.
 
 ### 3a. Pattern A — existing proxy/middleware file
 
@@ -215,6 +227,28 @@ callbacks: {
 ### 3c. Pattern C — no auth / open app
 
 Skip this step. `fiber-snatcher` will still function; just no bypass header is sent.
+
+### 3d. Pattern D — persistent profile (recommended for enriched sessions)
+
+If your app's `signIn` callback requires a real DB user (role/team/permissions populated), stub bypass is painful. **Skip the bypass entirely** and rely on Fiber Snatcher's persistent Chromium profile.
+
+**Workflow:**
+
+1. First run: `fiber-snatcher start` opens a headful Chromium with a persistent profile at `.fiber-snatcher/browser-profile/`.
+2. In that window, log in normally as a real user. Session cookies persist.
+3. Close and reopen the daemon any number of times. Cookies, localStorage, and sessionStorage survive.
+4. For CI / automation: after logging in once, snapshot with Playwright MCP's `browser_storage_state` (Fiber Snatcher's `auth snapshot` is a thin wrapper); commit the snapshot outside `.fiber-snatcher/`; restore it on headless runs.
+
+**Why this is usually the right call:**
+- No code changes to auth-handling — the app doesn't know Fiber Snatcher exists.
+- Works regardless of auth provider (NextAuth, Clerk, Supabase, custom).
+- Enriched sessions "just work" because they went through the real login flow.
+
+**Downsides:**
+- The persistent profile contains real session cookies. Treat `.fiber-snatcher/browser-profile/` like `~/.ssh/` — gitignored (already done by `init`), never shared.
+- If you rotate the session on the server side, you'll need to log in again in the Chromium window.
+
+Patterns A/B coexist fine with D — you can have both wired and use whichever fits the situation.
 
 ### Safety rails
 

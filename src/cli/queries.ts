@@ -19,7 +19,7 @@ import { requireConfig } from "../core/config.ts";
 import { controlSocketPath } from "../core/browser.ts";
 import { sendRequest } from "../core/ipc.ts";
 
-const OPS = new Set(["get", "invalidate", "refetch", "reset", "setData"]);
+const OPS = new Set(["list", "get", "invalidate", "refetch", "reset", "setData"]);
 
 export async function run(args: string[]): Promise<Result> {
   const adapterIdx = args.indexOf("--adapter");
@@ -44,6 +44,9 @@ export async function run(args: string[]): Promise<Result> {
         context: { got: sub },
       });
     }
+    // "list" doesn't take a key — treat as a no-op sub that pipes to list.
+    if (sub === "list") { action = { op: "list", filter }; }
+    else {
     const keyRaw = positional[1];
     if (!keyRaw) return err("E_NO_KEY", `queries ${sub} requires a queryKey as a JSON array`);
     let key: unknown[];
@@ -66,6 +69,7 @@ export async function run(args: string[]): Promise<Result> {
       action = { op: "setData", key, data };
     } else {
       action = { op: sub, key };
+    }
     }
   }
 

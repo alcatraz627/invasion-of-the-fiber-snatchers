@@ -78,16 +78,41 @@ async function main() {
           const logs = await page.evaluate((n) => (window as any).__snatcher__?.logs?.(n) ?? [], 10);
           return { id: req.id, ok: true, data: { url, title, adapters, recentLogs: logs } };
         }
-        case "goto": {
+        case "goto":
+        case "navigate": {
           await page.goto(String(req.url), { waitUntil: "domcontentloaded" });
           return { id: req.id, ok: true, data: { url: page.url() } };
         }
+        case "click": {
+          const selector = String((req as any).selector);
+          await page.click(selector, { timeout: 5000 });
+          return { id: req.id, ok: true, data: { clicked: selector } };
+        }
+        case "fill": {
+          const selector = String((req as any).selector);
+          const value = String((req as any).value ?? "");
+          await page.fill(selector, value, { timeout: 5000 });
+          return { id: req.id, ok: true, data: { filled: selector, value } };
+        }
+        case "press": {
+          const key = String((req as any).key);
+          const selector = (req as any).selector as string | undefined;
+          if (selector) {
+            await page.press(selector, key, { timeout: 5000 });
+          } else {
+            await page.keyboard.press(key);
+          }
+          return { id: req.id, ok: true, data: { pressed: key, selector: selector ?? null } };
+        }
         case "state": {
-          const data = await page.evaluate((sel) => {
-            const s = (window as any).__snatcher__;
-            if (!s) throw new Error("__snatcher__ not present; integrate expose.ts per USAGE.md");
-            return s.state(sel);
-          }, (req as any).selector);
+          const data = await page.evaluate(
+            ({ sel, opts }) => {
+              const s = (window as any).__snatcher__;
+              if (!s) throw new Error("__snatcher__ not present; integrate expose.ts per USAGE.md");
+              return s.state(sel, opts);
+            },
+            { sel: (req as any).selector, opts: (req as any).opts },
+          );
           return { id: req.id, ok: true, data };
         }
         case "dispatch": {

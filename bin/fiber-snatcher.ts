@@ -21,6 +21,10 @@ const COMMANDS = [
   "dispatch",
   "atoms",
   "queries",
+  "click",
+  "fill",
+  "press",
+  "navigate",
   "eval",
   "shoot",
   "errors",
@@ -37,32 +41,46 @@ const HELP = `Fiber Snatcher — React dev-app debugging toolkit for Claude.
 USAGE
   fiber-snatcher <command> [args] [--json]
 
-COMMANDS (V1)
-  init [--force] [--no-mcp] [--force-mcp]
-                                 Scaffold target project: inject files, optional .mcp.json, auth key.
-                                 --no-mcp skips MCP config entirely; --force-mcp merges into an existing file.
-  start [--port <N>]             Launch headful Playwright against the dev server; start log daemon
-  stop                           Close browser; stop daemon
-  status                         Show running browser + daemon state
-  doctor                         Verify: MCPs, dev server, debug surface, auth bypass — all reachable
-  state [<selector>]             Read React state/props for nearest stateful fiber at selector
-  dispatch                       Pipe JSON on stdin; routed to window.__snatcher__.dispatch
-  atoms [<name> [<value-json>]]  Jotai-aware: list / get / set atoms (adapter: jotai)
-  queries [<sub> <key> [<data>]] TanStack Query: list / get / invalidate / refetch / reset / setData
-  eval <file.ts>                 Evaluate a TS file in the page (escape hatch; --yes-i-know required)
-  shoot [<selector>]             Screenshot; saved to .fiber-snatcher/shots/
-  errors [--since <dur>]         Unified digest: build + runtime + console + failed-network
-  logs [--follow] [--source …]   Tail unified JSONL log
-  auth <subcmd>                  key | rotate | snapshot <name>
-  clean                          Kill orphan processes, clear .fiber-snatcher/tmp
-  version                        Print version
-  help                           This message
+LIFECYCLE
+  init                  Scaffold .fiber-snatcher/, optional .mcp.json, auth key.
+                        Flags: --force, --no-mcp, --force-mcp
+  start                 Launch headful Playwright + daemon
+  stop                  Close browser, end daemon
+  status                Running? current URL, adapters, recent log
+  doctor                End-to-end probe battery
+
+INSPECT
+  state [<selector>]    React state/props/hooks for nearest stateful fiber
+                        Flags: --full (include React internals), --shallow
+  atoms [list|<name> [<value-json>]]
+                        Jotai: list / get / set by debugLabel
+  queries [<sub> [<key-json>] [<data-json>]]
+                        TanStack Query: list / get / invalidate / refetch / reset / setData
+
+DRIVE
+  click <selector>          Playwright click (real input pipeline, fires React events)
+  fill <selector> <value>   Playwright fill (dispatches input+change with bubbling)
+  press <key> [--selector]  Keyboard press, optionally on a focused element
+  navigate <url-or-path>    page.goto; relative paths resolved against devUrl
+  dispatch                  Pipe JSON to the default adapter
+  eval <file.ts>            TS-aware: transpiles + returns last expression (--yes-i-know required)
+
+CAPTURE
+  shoot [<selector>]    Screenshot to .fiber-snatcher/shots/
+                        Flags: --name <tag>
+  errors                Grouped error digest. Flags: --since <dur>
+  logs                  Tail unified JSONL. Flags: --follow, --source, --level
+
+CARE
+  auth <sub>            key | rotate | snapshot <name>
+  clean                 Remove stale pidfiles, sockets. Flags: --prune-logs
+  version / help
 
 GLOBAL FLAGS
-  --json                         Machine-readable output on stdout
-  --cwd <dir>                    Run as if from a different target project
+  --json                Machine-readable output
+  --cwd <dir>           Act on a different target project
 
-Docs: see ~/Code/Claude/invasion-of-the-fiber-snatchers/USAGE.md`;
+Docs: ~/Code/Claude/invasion-of-the-fiber-snatchers/USAGE.md`;
 
 async function main() {
   const [cmdRaw, ...rest] = process.argv.slice(2);
@@ -102,7 +120,22 @@ async function main() {
   }
 
   const mod = (await import(modPath)) as { run: (args: string[]) => Promise<Result> };
-  const result = await mod.run(rest);
+  let result: Result;
+  try {
+    result = await mod.run(rest);
+  } catch (e) {
+    // Convert exceptions (like requireConfig → ConfigError) to a clean Result
+    // so agents always see structured output, even outside a project dir.
+    const err = e as { code?: string; message?: string };
+    result = {
+      ok: false,
+      code: err.code ?? "E_INTERNAL",
+      message: err.message ?? String(e),
+      next_steps: err.code === "E_NOT_INITIALIZED"
+        ? ["Run from inside a Next.js project, or pass --cwd <dir>.", "Or run `fiber-snatcher init` in the target project."]
+        : undefined,
+    };
+  }
   await renderResult(result, { json: jsonOut });
   process.exit(result.ok ? 0 : (result.exitCode ?? 1));
 }
