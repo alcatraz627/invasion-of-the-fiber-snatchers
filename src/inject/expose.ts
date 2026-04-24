@@ -42,9 +42,22 @@ export type LogEntry = {
 
 export type StateOpts = { full?: boolean; shallow?: boolean };
 
+export type ComponentsOpts = { count?: boolean; shallow?: boolean; full?: boolean; limit?: number };
+export type PortalOpts = { domOnly?: boolean; count?: boolean };
+
 export type SnatcherApi = {
   version: string;
   state(selector?: string, opts?: StateOpts): unknown;
+  /**
+   * Enumerate all mounted fibers whose component type has a matching
+   * displayName. Uses the same fiber walker pattern as state() but scans the
+   * whole document rather than ancestors of one element.
+   */
+  components(displayName: string, opts?: ComponentsOpts): unknown;
+  /** `document.getElementById(portalId)` + optional fiber-aware origin walk. */
+  portal(portalId: string, opts?: PortalOpts): unknown;
+  /** document.querySelectorAll(selector).length. Throws E_BAD_SELECTOR on invalid CSS. */
+  count(selector: string): number;
   /**
    * Routes an action through a registered adapter. Awaits the adapter's return
    * value (TanStack Query / async adapters return promises) and passes it
@@ -61,7 +74,7 @@ export type SnatcherApi = {
   adapters(): string[];
 };
 
-const RUNTIME_VERSION = "0.3.1";
+const RUNTIME_VERSION = "0.4.0";
 const MAX_LOGS = 500;
 
 type Fiber = { type?: any; memoizedState?: any; memoizedProps?: any; return?: Fiber | null; stateNode?: any };
@@ -283,6 +296,124 @@ function install() {
     },
     adapters() {
       return Array.from(adapters.keys());
+    },
+
+    components(target: string, opts?: ComponentsOpts) {
+      const snapOpts = {
+        includeInternals: opts?.full === true,
+        maxDepth: opts?.shallow ? 2 : 4,
+      };
+      const limit = opts?.limit ?? 200;
+      const seen = new WeakSet<Fiber>();
+      const matchedTypes = new Set<unknown>();
+      const hits: Array<{ path: string[]; props: unknown }> = [];
+
+      for (const el of Array.from(document.querySelectorAll("*"))) {
+        if (hits.length >= limit) break;
+        let fiber = getFiberFromNode(el);
+        while (fiber) {
+          if (seen.has(fiber)) break;
+          seen.add(fiber);
+          if (displayName(fiber.type) === target) {
+            matchedTypes.add(fiber.type);
+            const pathParts: string[] = [];
+            let pf: Fiber | null = fiber;
+            while (pf) {
+              const name = displayName(pf.type);
+              if (name && name !== "?" && typeof pf.type !== "string") pathParts.unshift(name);
+              pf = pf.return ?? null;
+            }
+            hits.push({
+              path: pathParts,
+              props: opts?.count ? undefined : safeSnapshot(fiber.memoizedProps, 0, snapOpts),
+            });
+            break;
+          }
+          fiber = fiber.return ?? null;
+        }
+      }
+
+      if (opts?.count) {
+        return { count: hits.length, distinctTypes: matchedTypes.size };
+      }
+      const result: Record<string, unknown> = {
+        count: hits.length,
+        matches: hits.map((h) => ({ path: h.path, props: h.props })),
+      };
+      if (matchedTypes.size > 1) {
+        result.warning = `"${target}" resolved to ${matchedTypes.size} distinct component type references — matches may span unrelated components with the same display name. Inspect props to disambiguate.`;
+      }
+      if (hits.length >= limit) {
+        result.truncated = `limit=${limit} reached; pass { limit: N } for more`;
+      }
+      return result;
+    },
+
+    portal(portalId: string, opts?: PortalOpts) {
+      const el = document.getElementById(portalId);
+      const exists = el !== null;
+      if (!exists) {
+        return { portalId, exists: false, childCount: 0, children: [] };
+      }
+      const children = Array.from(el.children).map((c) => {
+        const he = c as HTMLElement;
+        return {
+          tag: c.tagName,
+          id: he.id || undefined,
+          class: he.className || undefined,
+          innerText: (he.innerText ?? "").slice(0, 120),
+        };
+      });
+      const out: Record<string, unknown> = {
+        portalId,
+        exists: true,
+        childCount: children.length,
+        children,
+      };
+      if (opts?.count) return { count: children.length };
+      if (opts?.domOnly) return out;
+
+      // Fiber-aware: find fibers whose stateNode is this DOM element and whose
+      // parent is a Portal fiber (tag === 4 HostPortal). We walk all fibers
+      // reachable from document.* and record the components that created
+      // portals into this element.
+      const sources: Array<{ componentPath: string[]; child: unknown }> = [];
+      try {
+        const seen = new WeakSet<Fiber>();
+        for (const node of Array.from(document.querySelectorAll("*"))) {
+          let f = getFiberFromNode(node);
+          while (f) {
+            if (seen.has(f)) break;
+            seen.add(f);
+            // HostPortal fiber: tag === 4, stateNode.containerInfo === target
+            const containerInfo = (f as any).stateNode?.containerInfo ?? (f as any).stateNode;
+            if ((f as any).tag === 4 && containerInfo === el) {
+              const path: string[] = [];
+              let pf: Fiber | null = f.return ?? null;
+              while (pf) {
+                const name = displayName(pf.type);
+                if (name && name !== "?" && typeof pf.type !== "string") path.unshift(name);
+                pf = pf.return ?? null;
+              }
+              sources.push({ componentPath: path, child: { tag: (node as HTMLElement).tagName } });
+              break;
+            }
+            f = f.return ?? null;
+          }
+        }
+      } catch {
+        // Fiber walk failed — ship DOM-only result
+      }
+      if (sources.length > 0) out.sources = sources;
+      return out;
+    },
+
+    count(selector: string) {
+      try {
+        return document.querySelectorAll(selector).length;
+      } catch (e) {
+        throw new Error(`invalid selector: ${(e as Error).message}`);
+      }
     },
   };
 

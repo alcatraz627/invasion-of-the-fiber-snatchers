@@ -50,15 +50,32 @@ export async function run(args: string[]): Promise<Result> {
   //   - Pure-side-effect scripts (no trailing expression) → undefined.
   const preWrapped = wrapForReturn(src);
 
+  // If the source contains `await`, Bun treats it as a top-level module and
+  // rejects `return` at top level. Wrap in an async IIFE BEFORE transpile so
+  // return/await become function-scoped, then skip the CLI's outer wrap.
+  //
+  // Simple `await` regex is acceptable here — false positives (the word
+  // "await" inside a string or comment) are harmless: we wrap regardless,
+  // and the wrap is a no-op for sync code that happens to mention the word.
+  const needsAsyncContext = /\bawait\b/.test(preWrapped);
+  const beforeTranspile = needsAsyncContext
+    ? `(async () => { ${preWrapped} })()`
+    : preWrapped;
+
   let transpiled: string;
   try {
-    const t = new Bun.Transpiler({ loader: "ts", target: "browser" });
-    transpiled = t.transformSync(preWrapped);
+    const t = new Bun.Transpiler({ loader: "ts", target: "bun" });
+    transpiled = t.transformSync(beforeTranspile);
   } catch (e) {
     return err("E_TRANSPILE_FAILED", `Failed to transpile ${file}: ${(e as Error).message}`);
   }
 
-  const code = `(async () => { ${transpiled} })()`;
+  // Build the final wrapped form. If we already wrapped as an IIFE, the
+  // transpiled output is itself the expression — strip trailing `;` so
+  // `new Function("return ...")()` in the daemon doesn't choke.
+  const code = needsAsyncContext
+    ? transpiled.replace(/;\s*$/, "")
+    : `(async () => { ${transpiled} })()`;
 
   const cfg = await requireConfig();
   const res = await sendRequest(controlSocketPath(cfg), { id: "eval", op: "eval", code }, 30000)

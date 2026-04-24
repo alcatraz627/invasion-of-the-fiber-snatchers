@@ -125,6 +125,55 @@ async function main() {
           );
           return { id: req.id, ok: true, data };
         }
+        case "components": {
+          const data = await page.evaluate(
+            ({ name, opts }) => {
+              const s = (window as any).__snatcher__;
+              if (!s) throw new Error("__snatcher__ not present; integrate expose.ts per USAGE.md");
+              return s.components(name, opts);
+            },
+            { name: (req as any).name, opts: (req as any).opts },
+          );
+          return { id: req.id, ok: true, data };
+        }
+        case "portal": {
+          const data = await page.evaluate(
+            ({ id, opts }) => {
+              const s = (window as any).__snatcher__;
+              if (!s) throw new Error("__snatcher__ not present; integrate expose.ts per USAGE.md");
+              return s.portal(id, opts);
+            },
+            { id: (req as any).portalId, opts: (req as any).opts },
+          );
+          return { id: req.id, ok: true, data };
+        }
+        case "count": {
+          try {
+            const data = await page.evaluate(
+              (sel) => {
+                const s = (window as any).__snatcher__;
+                if (!s) throw new Error("__snatcher__ not present; integrate expose.ts per USAGE.md");
+                return s.count(sel);
+              },
+              String((req as any).selector),
+            );
+            return { id: req.id, ok: true, data };
+          } catch (e) {
+            const msg = (e as Error).message;
+            return { id: req.id, ok: false, error: msg, code: msg.includes("invalid selector") ? "E_BAD_SELECTOR" : undefined };
+          }
+        }
+        case "atom-get": {
+          const data = await page.evaluate(
+            ({ name, adapter }) => {
+              const s = (window as any).__snatcher__;
+              if (!s) throw new Error("__snatcher__ not present");
+              return s.dispatch({ op: "get", atom: name }, { adapter });
+            },
+            { name: (req as any).name, adapter: (req as any).adapter ?? "jotai" },
+          );
+          return { id: req.id, ok: true, data };
+        }
         case "dispatch": {
           const data = await page.evaluate(
             ({ action, adapter }) => {

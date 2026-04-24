@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.4.0] — 2026-04-24
+
+### New inspection primitives from the V0.3.2 feedback round
+
+Additive release — no breaking changes, all V0.3.x commands continue to work.
+
+**New — `fiber-snatcher components <displayName>`:**
+Enumerate all mounted fibers whose component type has matching `displayName`. Replaces the ~30-line eval script every agent writes when diagnosing mount-count bugs.
+
+```sh
+fiber-snatcher components PreviewFileModal          # full info: paths + props
+fiber-snatcher components PreviewFileModal --count  # integer only
+fiber-snatcher components PreviewFileModal --shallow --limit 50
+```
+
+Flags: `--count`, `--shallow`, `--full`, `--limit <N>`. When the name resolves to >1 distinct component type reference (same name, different imports), output includes a `warning` field so agents can disambiguate by props.
+
+**New — `fiber-snatcher portal <portalId>`:**
+`document.getElementById(portalId)` + fiber-aware origin walk. For debugging "why does this portal container have N children" stacking bugs.
+
+```sh
+fiber-snatcher portal modal-toolbar              # DOM snapshot + React portal sources
+fiber-snatcher portal modal-toolbar --dom-only   # faster, skip fiber walk
+fiber-snatcher portal modal-toolbar --count
+```
+
+The fiber-aware path walks fibers whose `tag === HostPortal` (4) and whose `stateNode.containerInfo === el` and emits a `componentPath` for each. If fiber walk fails, falls back to DOM-only — never crashes.
+
+**New — `fiber-snatcher count <selector>`:**
+`document.querySelectorAll(selector).length`. Plain integer to stdout without `--json`. Returns `E_BAD_SELECTOR` on invalid CSS.
+
+```sh
+fiber-snatcher count 'input[placeholder="Search"]'
+# → 3
+```
+
+**New — `fiber-snatcher atoms watch <name>`:**
+Polls a Jotai atom at `--interval` ms (default 200) and emits JSONL on each change. Terminates on `--timeout <ms>`, Ctrl-C, or page navigation.
+
+```sh
+fiber-snatcher atoms watch selectedModalId
+# {"ts":"…","name":"selectedModalId","value":null}
+# {"ts":"…","name":"selectedModalId","value":"preview_file_output"}
+# {"ts":"…","event":"closed","reason":"navigation","url":"/other/page"}
+```
+
+Implementation is polling-based (no IPC protocol change). Future: streaming when we add request/multi-response IPC.
+
+**Changed — eval handles top-level await + return together:**
+Surfaced by the V0.3.2 harness addendum. The V0.3.1 transpile pipeline rejected `const x = await ...; return x;` because Bun's `target: "browser"` treats top-level `await` as a module marker, which then forbids top-level `return`.
+
+Fix: detect `\bawait\b` in the pre-wrapped source; if present, pre-wrap the entire payload in an async IIFE before transpile (so return/await become function-scoped), then skip the CLI's outer async wrap (output is already an IIFE expression). Also switched default target from `browser` to `bun` for the same reason.
+
+No behavior change for sync code. Top-level await scripts that already worked still work; this patch just permits the combination.
+
+**Changed — `scripts/check-versions.ts` runs the eval harness in `prerelease`:**
+Release gate now runs `bun tests/eval-harness.ts` in addition to version-drift check + typecheck. 16-case suite covers V0.3.1 14 cases + V0.4.0 top-level-await regressions.
+
+**Breaking: none.**
+
+**Migration:** `git pull && bash scripts/install.sh && fiber-snatcher init --force` (auto-reloads the browser). Adapter files unchanged.
+
 ## [0.3.1] — 2026-04-24
 
 ### V0.3.0 retest fixes — eval regression, fill footgun, version drift

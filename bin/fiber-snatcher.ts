@@ -18,6 +18,9 @@ const COMMANDS = [
   "status",
   "doctor",
   "state",
+  "components",
+  "portal",
+  "count",
   "dispatch",
   "atoms",
   "queries",
@@ -52,8 +55,13 @@ LIFECYCLE
 INSPECT
   state [<selector>]    React state/props/hooks for nearest stateful fiber
                         Flags: --full (include React internals), --shallow
-  atoms [list|<name> [<value-json>]]
-                        Jotai: list / get / set by debugLabel
+  components <name>     List mounted fibers with matching displayName
+                        Flags: --count, --shallow, --full, --limit <N>
+  portal <id>           Inspect document.getElementById(id) — children + portal origins
+                        Flags: --dom-only, --count
+  count <selector>      Shortcut: document.querySelectorAll(selector).length
+  atoms [list|<name> [<value-json>] | watch <name> [--timeout] [--interval]]
+                        Jotai: list / get / set / stream changes by debugLabel
   queries [<sub> [<key-json>] [<data-json>]]
                         TanStack Query: list / get / invalidate / refetch / reset / setData
 

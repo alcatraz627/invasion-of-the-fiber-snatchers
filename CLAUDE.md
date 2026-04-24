@@ -53,6 +53,26 @@ fiber-snatcher stop           # if you started it; not required if the user alre
 - Ambiguous selectors return `E_STATE_FAILED` with the match count — narrow and retry, don't guess.
 - Returns `{ selector, domProps, ancestors: [{component, state, props, hooks}], page }`. `ancestors` is bottom-up — first entry is the closest stateful fiber.
 
+### `components <displayName>` — V0.4.0+
+
+- Lists every mounted fiber with that `displayName` plus its component path. Essential for "how many `<ModalX>` are mounted?" diagnostics.
+- `--count` returns `{count, distinctTypes}` — use this when you just need a number.
+- `--shallow` trims prop snapshots to depth 2; `--full` keeps React internals. Default is depth 4 with React internals stripped (matches `state`).
+- `--limit <N>` caps results (default 200). Important on huge pages.
+- Output includes a `warning` field if the displayName resolves to multiple distinct type references (same name, different imports). Read the warning and use props to disambiguate.
+
+### `portal <portalId>` — V0.4.0+
+
+- `fiber-snatcher portal modal-toolbar` → DOM snapshot + `sources` array listing component paths that created portals into the element.
+- `--dom-only` skips the fiber walk. Faster, safer, use when React internals are in a weird state.
+- `--count` returns just `{count: N}`.
+- `childCount > 1` on a portal ID that should be singular is the canary for the "same portalId rendered N times" stacking bug pattern.
+
+### `count <selector>` — V0.4.0+
+
+- Shortcut for `document.querySelectorAll(sel).length`. Plain integer to stdout without `--json`.
+- `E_BAD_SELECTOR` on invalid CSS — check the selector syntax.
+
 ### `dispatch`
 
 - Stdin JSON is whatever the registered adapter accepts. Read `app/layout.tsx` or the dev-runtime file to confirm the adapter shape first.
@@ -63,6 +83,7 @@ fiber-snatcher stop           # if you started it; not required if the user alre
 - `fiber-snatcher atoms` → lists every atom enumerable from the default Jotai store, each with `{name, value}`.
 - `fiber-snatcher atoms <name>` → single-atom read.
 - `fiber-snatcher atoms <name> <value-json>` → set. Value must be valid JSON (strings quoted).
+- `fiber-snatcher atoms watch <name>` (V0.4.0+) → stream JSONL of changes. Flags: `--timeout <ms>`, `--interval <ms>` (default 200). Auto-stops on page navigation with an `{event:"closed", reason:"navigation"}` final line.
 - If an atom you expect is missing from the list, its `debugLabel` isn't set OR the adapter wasn't given the app's atom module. Ask the user to `atom.debugLabel = "…"` or pass `atoms` in the adapter registration (USAGE.md §2b).
 
 ### `queries` — TanStack Query (V1.1+)

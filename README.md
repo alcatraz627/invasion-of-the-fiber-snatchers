@@ -130,8 +130,11 @@ Fiber Snatcher closes the gaps with a tiny runtime inject, a local-only auth-byp
 | `fiber-snatcher status`         | Is the daemon running? Current URL, adapters, recent log sample           |
 | `fiber-snatcher doctor`         | Probe battery — each step reported independently                          |
 | `fiber-snatcher state [sel]`    | React state/props/hooks for fiber at CSS selector (flags: `--full`, `--shallow`) |
+| `fiber-snatcher components <n>` | List mounted fibers by displayName (flags: `--count`, `--shallow`, `--full`, `--limit`) |
+| `fiber-snatcher portal <id>`    | Inspect `#<id>` children + React portal sources (flag: `--dom-only`, `--count`) |
+| `fiber-snatcher count <sel>`    | `querySelectorAll(sel).length` shortcut                                   |
 | `fiber-snatcher dispatch`       | Pipe JSON on stdin; routed through `__snatcher__.dispatch`                |
-| `fiber-snatcher atoms [name]`   | Jotai-aware: list / get / set atoms by `debugLabel`                       |
+| `fiber-snatcher atoms [name]`   | Jotai-aware: list / get / set / watch atoms by `debugLabel`               |
 | `fiber-snatcher queries [sub]`  | TanStack Query: list / get / invalidate / refetch / reset / setData       |
 | `fiber-snatcher click <sel>`    | Playwright click (real input pipeline, fires React events)                |
 | `fiber-snatcher fill <sel> <v>` | Playwright fill — dispatches input+change with bubbling                   |
