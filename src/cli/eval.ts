@@ -68,25 +68,63 @@ export async function run(args: string[]): Promise<Result> {
 }
 
 /**
- * If the transpiled body has no top-level `return`, turn the LAST expression
- * into a return. Cheap heuristic: split on `\n`, find the last non-empty line
- * that isn't a statement keyword; if it ends with `;`, drop the semi and
- * prepend `return `. Good enough for the common cases called out in the
- * feedback report. Agents who want precise control can use explicit `return`.
+ * Split the source at the last `;` or `\n` at depth 0 (outside strings and
+ * brackets). Everything after that split is the trailing expression; wrap it
+ * into a `return <expr>;`. This correctly handles:
+ *
+ *   const x = 42; x                   → const x = 42;  → return x;
+ *   document.title                    → return document.title;
+ *   42 + 1                             → return 42 + 1;
+ *   "hello"                            → return "hello";
+ *   const x = "hi; {"; x              → (string contents ignored) → return x;
+ *   (function(){return 1;})()         → return (function(){return 1;})();
+ *
+ * Bails (returns src unchanged — no implicit return) when:
+ *   - The script has an explicit top-level `return`.
+ *   - The tail token starts with a statement keyword (const/let/…).
+ *   - There is no tail expression.
+ *
+ * DCE note: Bun's transpiler strips bare expression statements. We MUST wrap
+ * before transpile so the payload rides inside a `return`, which DCE
+ * preserves.
  */
 function wrapForReturn(src: string): string {
-  if (/^\s*return\b/m.test(src)) return src;                 // explicit return present
-  const lines = src.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const raw = lines[i] ?? "";
-    const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith("//")) continue;
-    // Skip statements that don't produce a value
-    if (/^(const|let|var|function|class|if|for|while|switch|try|throw|import|export)\b/.test(trimmed)) return src;
-    // Strip trailing semicolon for the return
-    const stripped = raw.replace(/;\s*$/, "");
-    lines[i] = `return ${stripped};`;
-    return lines.join("\n");
+  if (/^\s*return\b/m.test(src)) return src;
+
+  // Strip trailing whitespace + semicolons + single-line comments so the
+  // "last meaningful token" is what we target.
+  const trimmed = src
+    .replace(/\/\/[^\n]*\s*$/gm, "")
+    .replace(/[\s;]+$/, "");
+  if (!trimmed) return src;
+
+  let depth = 0;
+  let inStr: string | null = null;
+  let prev = "";
+  let lastSplit = -1;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i] ?? "";
+    if (inStr) {
+      if (c === inStr && prev !== "\\") inStr = null;
+    } else if (c === '"' || c === "'" || c === "`") {
+      inStr = c;
+    } else if (c === "(" || c === "{" || c === "[") {
+      depth++;
+    } else if (c === ")" || c === "}" || c === "]") {
+      depth--;
+    } else if (depth === 0 && (c === ";" || c === "\n")) {
+      lastSplit = i;
+    }
+    prev = c;
   }
-  return src;
+
+  const tail = (lastSplit >= 0 ? trimmed.slice(lastSplit + 1) : trimmed).trim();
+  const prefix = lastSplit >= 0 ? trimmed.slice(0, lastSplit + 1) : "";
+
+  if (!tail) return src;
+  if (tail.startsWith("//") || tail.startsWith("/*")) return src;
+  if (/^(const|let|var|function|class|if|for|while|switch|try|throw|import|export)\b/.test(tail)) return src;
+
+  return `${prefix}\nreturn ${tail};\n`;
 }

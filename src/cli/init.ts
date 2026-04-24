@@ -16,6 +16,8 @@ import { ok, err, type Result } from "../core/result.ts";
 import { DEFAULT_AUTH_HEADER, writeConfig, type FsConfig } from "../core/config.ts";
 import { detectPm } from "../core/pm.ts";
 import { resolveTargetRoot } from "../core/paths.ts";
+import { controlSocketPath } from "../core/browser.ts";
+import { sendRequest } from "../core/ipc.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -137,6 +139,26 @@ export async function run(args: string[]): Promise<Result> {
     await fs.writeFile(giPath, ignoreLine);
   }
 
+  // If this was --force AND a daemon is running, auto-reload the page so the
+  // new expose.ts runtime takes effect immediately. Without this, the browser
+  // keeps running the old bundle until the next navigation and agents see
+  // stale behavior.
+  let reloaded = false;
+  if (force && existsSync(cfg.daemonPidFile)) {
+    const sock = controlSocketPath(cfg);
+    if (existsSync(sock)) {
+      try {
+        const res = await sendRequest(sock, { id: "init-reload", op: "eval", code: "(async () => { location.reload(); return 'reloaded'; })()" }, 5000);
+        if (res.ok) reloaded = true;
+      } catch {}
+    }
+  }
+
+  const finalWarnings = [...mcpWarnings];
+  if (force && !reloaded && existsSync(cfg.daemonPidFile)) {
+    finalWarnings.push("Daemon is running but auto-reload failed. Run `fiber-snatcher navigate <path>` or reload the browser manually to pick up the new runtime.");
+  }
+
   return ok(
     {
       root,
@@ -144,10 +166,11 @@ export async function run(args: string[]): Promise<Result> {
       devUrl: cfg.devUrl,
       pm: cfg.sources.pm,
       authKeyFingerprint: key.slice(0, 8) + "…",
+      browserReloaded: reloaded,
     },
     {
       code: "INITIALIZED",
-      warnings: mcpWarnings.length ? mcpWarnings : undefined,
+      warnings: finalWarnings.length ? finalWarnings : undefined,
       next_steps: [
         "Read USAGE.md and wire `.fiber-snatcher/runtime/expose.ts` into your app/layout.tsx (dev-only import).",
         "If your app has auth: add the bypass header check per USAGE.md (middleware or your proxy.ts).",

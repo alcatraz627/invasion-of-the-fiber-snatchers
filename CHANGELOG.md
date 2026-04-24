@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.1] — 2026-04-24
+
+### V0.3.0 retest fixes — eval regression, fill footgun, version drift
+
+Shakedown of V0.3.0 against the real target app surfaced three issues. All fixed:
+
+**P1 — eval-as-query broken for `assign-then-reference` (feedback v030 #5 regression):**
+- `const x = 42; x` returned `{ok: true}` with no data in V0.3.0 — my line-by-line `wrapForReturn` heuristic bailed out on any line starting with `const`/`let`/etc., missing the trailing identifier.
+- Rewrote to a **depth-aware splitter** that walks the source tracking bracket depth and string state, finding the last `;` or `\n` at depth 0 outside strings. Wraps everything after the split as the return value.
+- Handles: literals, identifiers (`const x = 42; x`), TS decls, multi-line code, strings with embedded `;`, IIFEs, paren-wrapped expressions, trailing comments.
+- Added 14-case unit test suite to `scripts/`-adjacent harness. All pass.
+
+**P2 — `click`/`fill`/`press` silently first-match on ambiguous selectors (feedback v030 #2):**
+- `fill 'input[placeholder="Search"]' "hello"` would silently hit the first match — usually the navbar global search, not the page-specific input the agent meant to target.
+- Drive commands now count matches first; if >1 and no `--nth`, return `E_SELECTOR_AMBIGUOUS` with the first 5 candidate labels (innerText / `name` / `aria-label` / `placeholder` / tag+id).
+- Added `--nth <N>` (0-indexed) to `click`, `fill`, `press` for explicit targeting. Matches Playwright's `locator` strictness defaults.
+
+**P3 — `RUNTIME_VERSION` drift (feedback v030 #12):**
+- CLI reported `0.3.0` but `expose.ts` still announced `v0.2.0`. Bumped the constant to `0.3.1`.
+- Added `scripts/check-versions.ts` that fails loudly if `package.json.version !== RUNTIME_VERSION`. Wired into a `prerelease` npm script — run `bun run prerelease` before any push that publishes.
+
+**P3 — `init --force` auto page-reload (feedback v030 #13):**
+- Previously, re-running `init --force` on a running daemon copied the new `expose.ts` to disk but the browser kept executing the old bundle until the next navigation. Agents saw stale behavior without knowing why.
+- `init --force` now sends a `page.reload()` over IPC if the daemon is up. If reload fails, emits a warning pointing the user at `fiber-snatcher navigate <path>` as the manual fix.
+
+No API changes otherwise. Safe in-place upgrade: `git pull && bash scripts/install.sh && fiber-snatcher init --force` (which will auto-reload the browser). Existing adapters unchanged.
+
 ## [0.3.0] — 2026-04-24
 
 ### From the V1.1 integration shakedown — eval becomes a query, drive commands land, state trims noise

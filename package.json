@@ -1,6 +1,6 @@
 {
   "name": "fiber-snatcher",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Fiber Snatcher — a local debugging toolkit that gives Claude first-class inspect/drive/assert capability on a React dev app.",
   "private": true,
   "type": "module",
@@ -10,6 +10,8 @@
   "scripts": {
     "fs": "bun run bin/fiber-snatcher.ts",
     "typecheck": "bun tsc --noEmit",
+    "check-versions": "bun scripts/check-versions.ts",
+    "prerelease": "bun scripts/check-versions.ts && bun tsc --noEmit",
     "install-link": "bash scripts/install.sh"
   },
   "dependencies": {

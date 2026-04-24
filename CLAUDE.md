@@ -90,10 +90,12 @@ fiber-snatcher stop           # if you started it; not required if the user alre
 
 Instead of eval-based clicks/navigation, use these. They go through Playwright's real input pipeline so React synthetic events fire correctly.
 
-- `fiber-snatcher click <selector>` — single click.
-- `fiber-snatcher fill <selector> <value>` — sets value + dispatches the React-expected events.
-- `fiber-snatcher press <key> [--selector <sel>]` — Playwright keyboard notation ("Enter", "Shift+Tab", "Meta+A"). Without `--selector`, acts on the currently focused element.
+- `fiber-snatcher click <selector> [--nth <N>]` — single click.
+- `fiber-snatcher fill <selector> <value> [--nth <N>]` — sets value + dispatches the React-expected events.
+- `fiber-snatcher press <key> [--selector <sel>] [--nth <N>]` — Playwright keyboard notation ("Enter", "Shift+Tab", "Meta+A"). Without `--selector`, acts on the currently focused element.
 - `fiber-snatcher navigate <url-or-path>` — page.goto; relative paths resolved against the daemon's devUrl. Use this instead of `location.href = …` via eval — real navigation, awaits DOMContentLoaded.
+
+**Ambiguous selectors (V0.3.1+):** `click` / `fill` / `press` now refuse to silently first-match. If a selector matches >1 element, you get `E_SELECTOR_AMBIGUOUS` with the first 5 candidate labels and must either narrow the selector or pass `--nth <N>` (0-indexed). Matches Playwright's `locator` strictness — prevents the "I meant the page-specific search but hit the navbar search" footgun.
 
 ### `shoot [selector] --name <tag>`
 

@@ -61,7 +61,7 @@ export type SnatcherApi = {
   adapters(): string[];
 };
 
-const RUNTIME_VERSION = "0.2.0";
+const RUNTIME_VERSION = "0.3.1";
 const MAX_LOGS = 500;
 
 type Fiber = { type?: any; memoizedState?: any; memoizedProps?: any; return?: Fiber | null; stateNode?: any };
