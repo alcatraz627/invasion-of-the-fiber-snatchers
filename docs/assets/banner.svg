@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 440" width="1400" height="440" role="img" aria-label="Invasion of the Body Fiber Snatchers — a React dev-app debugging toolkit">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="85%">
+      <stop offset="0%" stop-color="#2a1458"/>
+      <stop offset="45%" stop-color="#0f0a33"/>
+      <stop offset="100%" stop-color="#02020a"/>
+    </radialGradient>
+    <radialGradient id="pod" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#9dffc4"/>
+      <stop offset="45%" stop-color="#2ee59d"/>
+      <stop offset="85%" stop-color="#0c6b40"/>
+      <stop offset="100%" stop-color="#041a10"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2ee59d" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#2ee59d" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a31f36" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#a31f36" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="scanlines" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="2" fill="#000" opacity="0.1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1400" height="440" fill="url(#bg)"/>
+
+  <!-- star field -->
+  <g fill="#fff" opacity="0.75">
+    <circle cx="80" cy="40" r="0.9"/><circle cx="210" cy="25" r="0.7"/><circle cx="340" cy="55" r="1.1"/>
+    <circle cx="470" cy="30" r="0.6"/><circle cx="620" cy="45" r="0.9"/><circle cx="760" cy="22" r="1.2"/>
+    <circle cx="890" cy="50" r="0.7"/><circle cx="1040" cy="35" r="1"/><circle cx="1180" cy="60" r="0.8"/>
+    <circle cx="1290" cy="30" r="0.9"/>
+    <circle cx="150" cy="390" r="0.7"/><circle cx="380" cy="410" r="0.9"/><circle cx="580" cy="395" r="0.6"/>
+    <circle cx="820" cy="415" r="1"/><circle cx="1060" cy="385" r="0.8"/><circle cx="1260" cy="400" r="0.7"/>
+    <circle cx="260" cy="95" r="0.5"/><circle cx="550" cy="140" r="0.5"/><circle cx="950" cy="120" r="0.5"/>
+    <circle cx="1320" cy="155" r="0.5"/>
+  </g>
+
+  <!-- atmospheric glows -->
+  <ellipse cx="200" cy="300" rx="280" ry="170" fill="url(#glow)"/>
+  <ellipse cx="1200" cy="240" rx="220" ry="140" fill="url(#glow2)"/>
+
+  <!-- pod left with tendrils -->
+  <g transform="translate(190 290)">
+    <g stroke="#2ee59d" stroke-width="2" fill="none" opacity="0.7" stroke-linecap="round">
+      <path d="M -50,-75 Q -95,-140 -65,-200"/>
+      <path d="M -25,-92 Q -10,-160 45,-200"/>
+      <path d="M 50,-65 Q 115,-95 140,-150"/>
+      <path d="M 58,-15 Q 135,-15 185,-45"/>
+      <path d="M 35,50 Q 110,75 150,60"/>
+      <path d="M -40,60 Q -90,90 -130,75"/>
+    </g>
+    <ellipse rx="80" ry="108" fill="url(#pod)"/>
+    <path d="M 0,-100 Q 20,0 0,100" stroke="#021a10" stroke-width="3.2" fill="none"/>
+    <path d="M -28,-88 Q -7,0 -28,88" stroke="#021a10" stroke-width="1.8" fill="none" opacity="0.55"/>
+    <path d="M 28,-82 Q 40,0 28,82" stroke="#021a10" stroke-width="1.6" fill="none" opacity="0.45"/>
+    <path d="M -10,-35 L 7,0 L -12,30 L 5,70" stroke="#f9d342" stroke-width="1.8" fill="none" opacity="0.9"/>
+    <ellipse cx="-28" cy="-52" rx="20" ry="9" fill="#fff" opacity="0.35"/>
+  </g>
+
+  <!-- fiber-tree right -->
+  <g transform="translate(1180 250)" stroke="#a31f36" fill="none" opacity="0.9">
+    <g stroke-width="1.8">
+      <line x1="0" y1="0" x2="-60" y2="-40"/>
+      <line x1="0" y1="0" x2="60" y2="-40"/>
+      <line x1="0" y1="0" x2="-40" y2="50"/>
+      <line x1="0" y1="0" x2="40" y2="50"/>
+      <line x1="-60" y1="-40" x2="-95" y2="-85"/>
+      <line x1="-60" y1="-40" x2="-25" y2="-85"/>
+      <line x1="60" y1="-40" x2="25" y2="-85"/>
+      <line x1="60" y1="-40" x2="95" y2="-85"/>
+      <line x1="-40" y1="50" x2="-72" y2="100"/>
+      <line x1="40" y1="50" x2="72" y2="100"/>
+    </g>
+    <g fill="#f9d342" stroke="none">
+      <circle cx="0" cy="0" r="6"/>
+      <circle cx="-60" cy="-40" r="4"/>
+      <circle cx="-40" cy="50" r="4"/><circle cx="40" cy="50" r="4"/>
+      <circle cx="-95" cy="-85" r="3"/>
+      <circle cx="25" cy="-85" r="3"/><circle cx="95" cy="-85" r="3"/>
+      <circle cx="-72" cy="100" r="3"/><circle cx="72" cy="100" r="3"/>
+    </g>
+    <!-- snatched (green) nodes -->
+    <circle cx="60" cy="-40" r="5.5" fill="#2ee59d" stroke="none"/>
+    <circle cx="-25" cy="-85" r="3.5" fill="#2ee59d" stroke="none"/>
+    <circle cx="60" cy="-40" r="11" fill="none" stroke="#2ee59d" stroke-width="1" opacity="0.5"/>
+    <circle cx="-25" cy="-85" r="8" fill="none" stroke="#2ee59d" stroke-width="1" opacity="0.5"/>
+  </g>
+
+  <!-- title group -->
+  <g text-anchor="middle">
+    <!-- topper — explicit spacing via double-spaces in the string (tspan letter-spacing is unreliable) -->
+    <text x="700" y="52" font-size="16" fill="#f9d342" font-family="'Courier New', monospace" letter-spacing="4">◆ &#160; C L A U D E &#160; C O D E &#160; P R E S E N T S &#160; ◆</text>
+
+    <!-- "INVASION OF THE" -->
+    <text x="700" y="118" font-size="52" fill="#f9d342" letter-spacing="12" stroke="#a31f36" stroke-width="1" font-family="'Impact', 'Arial Black', sans-serif">INVASION OF THE</text>
+
+    <!-- BODY (crossed-out, tilted) + FIBER -->
+    <g font-family="'Impact', 'Arial Black', sans-serif">
+      <text x="530" y="228" font-size="118" fill="#6b6b89" letter-spacing="6" opacity="0.85" transform="rotate(-4 530 228)">BODY</text>
+      <line x1="412" y1="238" x2="660" y2="188" stroke="#ff2744" stroke-width="10" stroke-linecap="round"/>
+      <line x1="415" y1="188" x2="660" y2="242" stroke="#ff2744" stroke-width="10" stroke-linecap="round" opacity="0.42"/>
+      <text x="870" y="228" font-size="122" fill="#2ee59d" letter-spacing="6" stroke="#021a10" stroke-width="2">FIBER</text>
+    </g>
+
+    <!-- SNATCHERS line -->
+    <text x="700" y="340" font-size="94" fill="#f9d342" letter-spacing="24" stroke="#a31f36" stroke-width="1.2" font-family="'Impact', 'Arial Black', sans-serif">SNATCHERS</text>
+
+    <!-- tagline -->
+    <text x="700" y="388" font-size="15" fill="#c9c9e3" letter-spacing="3" font-family="'Courier New', monospace">a local React dev-app debugging toolkit &#8212; for coding agents</text>
+  </g>
+
+  <!-- VOL. I stamp bottom-left -->
+  <g transform="translate(70 405) rotate(-10)" font-family="'Courier New', monospace">
+    <rect x="-42" y="-16" width="84" height="26" fill="none" stroke="#ff2744" stroke-width="2" rx="3"/>
+    <text x="0" y="3" text-anchor="middle" font-size="12" fill="#ff2744" letter-spacing="3" font-weight="bold">VOL. &#160;I</text>
+  </g>
+
+  <!-- bottom-right tilted stamp -->
+  <g transform="translate(1330 408) rotate(6)" font-family="'Courier New', monospace">
+    <text x="0" y="0" text-anchor="end" font-size="11" fill="#2ee59d" letter-spacing="2">&#9733; NOW IN FULL HMR &#9733;</text>
+  </g>
+
+  <!-- scanline overlay -->
+  <rect width="1400" height="440" fill="url(#scanlines)"/>
+</svg>

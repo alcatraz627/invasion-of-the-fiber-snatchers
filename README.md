@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="Invasion of the Fiber Snatchers — a local React dev-app debugging toolkit for coding agents" width="100%"/>
+</p>
+
 # Fiber Snatcher
 
 > *Give Claude a proper hands-and-eyes handle into your local React dev app.*
