@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.1] — 2026-04-24
+
+### Bug fixes from first real-app shakedown
+
+- **`shoot --name <n>` IPC timeout.** `shoot.ts` was treating the value of `--name` as a positional CSS selector; Playwright then hung waiting for a matching element. Fixed by excluding known flag values from positional parsing. (Bug #2)
+- **`init` silently overwrites `.mcp.json`.** Projects that follow a "MCP disabled at rest" pattern were losing their empty `mcpServers` policy on init. Fixed: existing `.mcp.json` is now left untouched; re-run with `--force-mcp` to merge the template, or `--no-mcp` to skip entirely. (Bug #3)
+- **`jotai.ts` TS2698 spread of possibly-truthy unknown** at line 98. Replaced conditional-spread pattern with explicit ternary. (Bug #1)
+
+No API changes. Safe to upgrade in place: `git pull && bash scripts/install.sh`. Projects initialized at 0.2.0 don't need to re-run `init` (the adapter file fix only affects tsc in consumer projects).
+
 ## [0.2.0] — 2026-04-24
 
 ### V1.1 — Jotai + TanStack Query adapters

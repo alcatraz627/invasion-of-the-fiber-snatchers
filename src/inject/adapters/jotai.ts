@@ -95,7 +95,7 @@ export function createJotaiAdapter(opts: {
 
   return {
     getState() {
-      return enumerate().map(({ name, value, error }) => ({ name, value, ...(error && { error }) }));
+      return enumerate().map(({ name, value, error }) => (error !== undefined ? { name, value, error } : { name, value }));
     },
     dispatch(action: unknown) {
       const a = action as { op?: string; atom?: string; value?: unknown };

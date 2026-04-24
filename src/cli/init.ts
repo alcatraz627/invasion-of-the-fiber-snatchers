@@ -22,6 +22,8 @@ const REPO_ROOT = resolve(HERE, "..", "..");
 
 export async function run(args: string[]): Promise<Result> {
   const force = args.includes("--force");
+  const noMcp = args.includes("--no-mcp");
+  const forceMcp = args.includes("--force-mcp");
   const root = await resolveTargetRoot();
   const dataDir = join(root, ".fiber-snatcher");
 
@@ -97,15 +99,33 @@ export async function run(args: string[]): Promise<Result> {
   };
   await writeConfig(cfg);
 
-  // Merge mcp-template.json into target's .mcp.json
-  const mcpTemplate = JSON.parse(await fs.readFile(join(REPO_ROOT, "mcp-template.json"), "utf8"));
+  // .mcp.json handling — respect the "disabled at rest" pattern some projects
+  // use (empty mcpServers deliberately left empty). Never silently modify an
+  // existing file. Rules:
+  //   --no-mcp                 → skip entirely
+  //   --force-mcp              → merge unconditionally (old behavior)
+  //   file does not exist      → create it with our template
+  //   file exists              → skip, emit a mcp_skipped warning with guidance
+  const mcpWarnings: string[] = [];
   const mcpPath = join(root, ".mcp.json");
-  let existingMcp: any = {};
-  if (existsSync(mcpPath)) {
-    try { existingMcp = JSON.parse(await fs.readFile(mcpPath, "utf8")); } catch {}
+  if (noMcp) {
+    mcpWarnings.push(".mcp.json: skipped (--no-mcp). Merge manually from ~/Code/Claude/invasion-of-the-fiber-snatchers/mcp-template.json if desired.");
+  } else {
+    const mcpTemplate = JSON.parse(await fs.readFile(join(REPO_ROOT, "mcp-template.json"), "utf8"));
+    const alreadyExists = existsSync(mcpPath);
+    if (!alreadyExists) {
+      await fs.writeFile(mcpPath, JSON.stringify({ mcpServers: mcpTemplate.mcpServers }, null, 2));
+    } else if (forceMcp) {
+      let existing: any = {};
+      try { existing = JSON.parse(await fs.readFile(mcpPath, "utf8")); } catch {}
+      existing.mcpServers = { ...(existing.mcpServers ?? {}), ...mcpTemplate.mcpServers };
+      await fs.writeFile(mcpPath, JSON.stringify(existing, null, 2));
+    } else {
+      mcpWarnings.push(
+        ".mcp.json: existing file left untouched. Some projects keep MCP servers disabled at rest. To merge the fiber-snatcher template (playwright, chrome-devtools, next-devtools), re-run with --force-mcp or copy manually from ~/Code/Claude/invasion-of-the-fiber-snatchers/mcp-template.json.",
+      );
+    }
   }
-  existingMcp.mcpServers = { ...(existingMcp.mcpServers ?? {}), ...mcpTemplate.mcpServers };
-  await fs.writeFile(mcpPath, JSON.stringify(existingMcp, null, 2));
 
   // Gitignore append
   const giPath = join(root, ".gitignore");
@@ -127,6 +147,7 @@ export async function run(args: string[]): Promise<Result> {
     },
     {
       code: "INITIALIZED",
+      warnings: mcpWarnings.length ? mcpWarnings : undefined,
       next_steps: [
         "Read USAGE.md and wire `.fiber-snatcher/runtime/expose.ts` into your app/layout.tsx (dev-only import).",
         "If your app has auth: add the bypass header check per USAGE.md (middleware or your proxy.ts).",

@@ -38,7 +38,9 @@ USAGE
   fiber-snatcher <command> [args] [--json]
 
 COMMANDS (V1)
-  init [--target <dir>]          Scaffold target project: inject files, .mcp.json, auth key
+  init [--force] [--no-mcp] [--force-mcp]
+                                 Scaffold target project: inject files, optional .mcp.json, auth key.
+                                 --no-mcp skips MCP config entirely; --force-mcp merges into an existing file.
   start [--port <N>]             Launch headful Playwright against the dev server; start log daemon
   stop                           Close browser; stop daemon
   status                         Show running browser + daemon state

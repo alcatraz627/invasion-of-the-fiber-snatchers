@@ -5,7 +5,18 @@ import { controlSocketPath } from "../core/browser.ts";
 import { sendRequest } from "../core/ipc.ts";
 
 export async function run(args: string[]): Promise<Result> {
-  const selector = args.find((a) => !a.startsWith("--"));
+  // Treat values of known flags as NON-positional. Previously any non-"--"
+  // arg was read as a selector, so `shoot --name diagnosis` picked "diagnosis"
+  // as a CSS selector and Playwright hung waiting for an element. Bug #2.
+  const FLAG_VALUE_AFTER = new Set(["--name", "--cwd", "--adapter"]);
+  const FLAG_SELF = new Set(["--json", "--fullpage"]);
+  const positional = args.filter((a, i) => {
+    if (a.startsWith("--")) return false;
+    const prev = args[i - 1];
+    if (prev && FLAG_VALUE_AFTER.has(prev)) return false;
+    return true;
+  });
+  const selector = positional[0];
   const nameIdx = args.indexOf("--name");
   const name = nameIdx >= 0 ? args[nameIdx + 1] : `shot-${Date.now()}`;
 
