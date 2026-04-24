@@ -43,7 +43,15 @@ export type LogEntry = {
 export type SnatcherApi = {
   version: string;
   state(selector?: string): unknown;
-  dispatch(action: unknown, opts?: { adapter?: string }): { before: unknown; after: unknown; changed: boolean };
+  /**
+   * Routes an action through a registered adapter. Awaits the adapter's return
+   * value (TanStack Query / async adapters return promises) and passes it
+   * back to the caller verbatim.
+   *
+   * Pick an adapter by name via `opts.adapter`; defaults to the first
+   * registered.
+   */
+  dispatch(action: unknown, opts?: { adapter?: string }): Promise<unknown>;
   route(): { pathname: string; search: string };
   logs(n?: number): LogEntry[];
   log(entry: Partial<LogEntry> & { body: string; level?: LogEntry["level"] }): void;
@@ -51,7 +59,7 @@ export type SnatcherApi = {
   adapters(): string[];
 };
 
-const RUNTIME_VERSION = "0.1.0";
+const RUNTIME_VERSION = "0.2.0";
 const MAX_LOGS = 500;
 
 type Fiber = { type?: any; memoizedState?: any; memoizedProps?: any; return?: Fiber | null; stateNode?: any };
@@ -212,15 +220,14 @@ function install() {
         page: location.pathname,
       };
     },
-    dispatch(action, opts) {
+    async dispatch(action, opts) {
       const name = opts?.adapter ?? adapters.keys().next().value;
       if (!name) throw new Error("no adapters registered; call __snatcher__.register(name, adapter) in app init");
       const adapter = adapters.get(String(name));
-      if (!adapter) throw new Error(`adapter not found: ${name}`);
-      const before = safeSnapshot(adapter.getState());
-      adapter.dispatch(action);
-      const after = safeSnapshot(adapter.getState());
-      return { before, after, changed: JSON.stringify(before) !== JSON.stringify(after) };
+      if (!adapter) throw new Error(`adapter not found: ${name}. registered: ${[...adapters.keys()].join(", ") || "(none)"}`);
+      // Await so async adapters (TanStack Query invalidate/refetch) resolve
+      const result = await Promise.resolve(adapter.dispatch(action));
+      return safeSnapshot(result);
     },
     route() {
       return { pathname: location.pathname, search: location.search };

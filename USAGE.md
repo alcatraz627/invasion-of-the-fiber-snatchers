@@ -86,7 +86,67 @@ if (typeof window !== "undefined" && window.__snatcher__) {
 }
 ```
 
-Each project picks whichever adapters make sense. V1.1 will ship first-class TanStack Query and Jotai adapters.
+Each project picks whichever adapters make sense.
+
+### 2b. First-class adapters — Jotai and TanStack Query (V1.1+)
+
+Fiber Snatcher ships adapters for two common cases. They're copied into `.fiber-snatcher/runtime/adapters/` by `fiber-snatcher init` — just import and register.
+
+**Jotai adapter.** Maps `window.__snatcher__` to `window.__snatcher__.register("jotai", …)` so `fiber-snatcher atoms` can list/get/set atoms by their `debugLabel`.
+
+```ts
+// src/dev/fiber-snatcher-runtime.ts
+if (process.env.NODE_ENV === "development") {
+  require("../../.fiber-snatcher/runtime/expose");
+  if (typeof window !== "undefined" && window.__snatcher__) {
+    Promise.all([
+      import("jotai"),
+      import("@/state/atoms"),                                   // your atom module
+      import("../../.fiber-snatcher/runtime/adapters/jotai"),
+    ]).then(([{ getDefaultStore }, atomsModule, { createJotaiAdapter }]) => {
+      window.__snatcher__!.register("jotai", createJotaiAdapter({
+        store: getDefaultStore(),
+        atoms: atomsModule,       // gives fallback enumeration if dev4_get_mounted_atoms is missing
+      }));
+    });
+  }
+}
+```
+
+**Best practice:** set `debugLabel` on every atom you want addressable:
+```ts
+export const cartAtom = atom<Item[]>([]);
+cartAtom.debugLabel = "cart";
+```
+
+Then: `fiber-snatcher atoms cart`, `fiber-snatcher atoms cart '[{"id":"a"}]'`.
+
+**TanStack Query adapter.** Wraps your `QueryClient` so `fiber-snatcher queries` can list / invalidate / refetch / setData.
+
+```ts
+if (typeof window !== "undefined" && window.__snatcher__) {
+  Promise.all([
+    import("@/lib/query-client"),                                // export const queryClient = new QueryClient(...)
+    import("../../.fiber-snatcher/runtime/adapters/tanstack-query"),
+  ]).then(([{ queryClient }, { createTanstackQueryAdapter }]) => {
+    window.__snatcher__!.register("queries", createTanstackQueryAdapter({ client: queryClient }));
+  });
+}
+```
+
+Then from Claude:
+
+```sh
+fiber-snatcher queries                               # list all queries (compact)
+fiber-snatcher queries --filter user                 # narrow by keyString substring
+fiber-snatcher queries get '["user",1]'              # full data for one query
+fiber-snatcher queries invalidate '["user"]'         # invalidateQueries
+fiber-snatcher queries refetch '["user",1]'          # refetchQueries
+fiber-snatcher queries reset '["user"]'              # resetQueries
+fiber-snatcher queries setData '["user",1]' '{"name":"X"}'  # setQueryData
+```
+
+All JSON keys/values must be valid JSON — quote strings inside arrays.
 
 ## 3. Wire auth bypass
 

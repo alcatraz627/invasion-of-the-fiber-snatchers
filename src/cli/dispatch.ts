@@ -23,20 +23,18 @@ export async function run(args: string[]): Promise<Result> {
   }
 
   const cfg = await requireConfig();
-  const res = await sendRequest(controlSocketPath(cfg), { id: "dispatch", op: "dispatch", action, adapter }, 10000)
+  const res = await sendRequest(controlSocketPath(cfg), { id: "dispatch", op: "dispatch", action, adapter }, 15000)
     .catch((e) => ({ id: "dispatch", ok: false as const, error: String(e.message ?? e) }));
   if (!res.ok) {
     return err("E_DISPATCH_FAILED", res.error, {
       next_steps: [
         "Ensure you've called `window.__snatcher__.register(name, adapter)` in app init.",
         "Run `fiber-snatcher status` to see registered adapters.",
+        "For TanStack Query use `fiber-snatcher queries`. For Jotai use `fiber-snatcher atoms`.",
       ],
     });
   }
-  const data = res.data as { before: unknown; after: unknown; changed: boolean };
-  return ok(data, {
-    warnings: data.changed ? undefined : ["Action had no effect (state unchanged)."],
-  });
+  return ok(res.data);
 }
 
 function readStdin(): Promise<string> {

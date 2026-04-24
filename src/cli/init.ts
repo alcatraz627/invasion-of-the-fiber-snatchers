@@ -64,6 +64,15 @@ export async function run(args: string[]): Promise<Result> {
     await fs.copyFile(src, dst);
   }
 
+  // Copy adapter files into runtime/adapters/
+  await fs.mkdir(join(dataDir, "runtime", "adapters"), { recursive: true });
+  const adapterFiles = ["jotai.ts", "tanstack-query.ts"];
+  for (const f of adapterFiles) {
+    const src = join(REPO_ROOT, "src", "inject", "adapters", f);
+    const dst = join(dataDir, "runtime", "adapters", f);
+    await fs.copyFile(src, dst);
+  }
+
   // Auth key
   const authKeyPath = join(dataDir, "auth", "dev-key");
   const key = randomBytes(32).toString("hex");

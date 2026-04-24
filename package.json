@@ -1,6 +1,6 @@
 {
   "name": "fiber-snatcher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Fiber Snatcher — a local debugging toolkit that gives Claude first-class inspect/drive/assert capability on a React dev app.",
   "private": true,
   "type": "module",

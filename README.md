@@ -131,6 +131,8 @@ Fiber Snatcher closes the gaps with a tiny runtime inject, a local-only auth-byp
 | `fiber-snatcher doctor`         | Probe battery — each step reported independently                          |
 | `fiber-snatcher state [sel]`    | React state/props/hooks for fiber at CSS selector                         |
 | `fiber-snatcher dispatch`       | Pipe JSON on stdin; routed through `__snatcher__.dispatch`                |
+| `fiber-snatcher atoms [name]`   | Jotai-aware: list / get / set atoms by `debugLabel`                       |
+| `fiber-snatcher queries [sub]`  | TanStack Query: list / get / invalidate / refetch / reset / setData       |
 | `fiber-snatcher eval <file>`    | Evaluate a TS file in page context (escape hatch, requires `--yes-i-know`) |
 | `fiber-snatcher shoot [sel]`    | Screenshot to `.fiber-snatcher/shots/`                                    |
 | `fiber-snatcher errors`         | Grouped error digest over time window (default 10m)                       |
@@ -144,7 +146,8 @@ Full specifications and agent operating rules: [`CLAUDE.md`](./CLAUDE.md).
 
 See [`CHANGELOG.md`](./CHANGELOG.md). Highlights:
 
-- **V1.1** — TanStack Query + Jotai adapters, `next-devtools-mcp get_errors` polling, `shoot --wait-for`, visual diff.
+- **V1.1** — ✅ Jotai + TanStack Query adapters shipped.
+- **V1.2** — `next-devtools-mcp get_errors` polling into the unified log, `shoot --wait-for`, visual diff, first-class Zustand + Redux adapters.
 - **V2** — single-file Bun binary, chat REPL, multi-page coordination, Linux/Windows parity.
 
 ## License

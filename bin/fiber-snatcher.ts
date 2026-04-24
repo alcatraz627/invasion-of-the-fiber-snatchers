@@ -19,6 +19,8 @@ const COMMANDS = [
   "doctor",
   "state",
   "dispatch",
+  "atoms",
+  "queries",
   "eval",
   "shoot",
   "errors",
@@ -43,6 +45,8 @@ COMMANDS (V1)
   doctor                         Verify: MCPs, dev server, debug surface, auth bypass — all reachable
   state [<selector>]             Read React state/props for nearest stateful fiber at selector
   dispatch                       Pipe JSON on stdin; routed to window.__snatcher__.dispatch
+  atoms [<name> [<value-json>]]  Jotai-aware: list / get / set atoms (adapter: jotai)
+  queries [<sub> <key> [<data>]] TanStack Query: list / get / invalidate / refetch / reset / setData
   eval <file.ts>                 Evaluate a TS file in the page (escape hatch; --yes-i-know required)
   shoot [<selector>]             Screenshot; saved to .fiber-snatcher/shots/
   errors [--since <dur>]         Unified digest: build + runtime + console + failed-network

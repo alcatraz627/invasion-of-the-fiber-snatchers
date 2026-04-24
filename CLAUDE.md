@@ -56,7 +56,23 @@ fiber-snatcher stop           # if you started it; not required if the user alre
 ### `dispatch`
 
 - Stdin JSON is whatever the registered adapter accepts. Read `app/layout.tsx` or the dev-runtime file to confirm the adapter shape first.
-- Response includes `{before, after, changed}`. If `changed === false`, the action was a no-op — investigate before retrying.
+- Response is the adapter's raw return value. For Jotai and TanStack Query prefer the typed `atoms` / `queries` wrappers below.
+
+### `atoms` — Jotai (V1.1+)
+
+- `fiber-snatcher atoms` → lists every atom enumerable from the default Jotai store, each with `{name, value}`.
+- `fiber-snatcher atoms <name>` → single-atom read.
+- `fiber-snatcher atoms <name> <value-json>` → set. Value must be valid JSON (strings quoted).
+- If an atom you expect is missing from the list, its `debugLabel` isn't set OR the adapter wasn't given the app's atom module. Ask the user to `atom.debugLabel = "…"` or pass `atoms` in the adapter registration (USAGE.md §2b).
+
+### `queries` — TanStack Query (V1.1+)
+
+- `fiber-snatcher queries` → compact list (`key, status, fetchStatus, hasData, dataUpdatedAt, error`). Large data payloads are NOT included — inspect with `get` below.
+- `fiber-snatcher queries --filter <substr>` → narrow by keyString substring.
+- `fiber-snatcher queries get '["user",1]'` → full data + status + error for one query.
+- `fiber-snatcher queries invalidate '["user"]'` / `refetch` / `reset` — async, resolves before return.
+- `fiber-snatcher queries setData '["user",1]' '{"name":"X"}'` → overwrite cache entry. Returns `{previous, next}`.
+- QueryKeys must be valid JSON arrays — quote strings inside: `'["users","me"]'` not `["users","me"]`.
 
 ### `eval <file> --yes-i-know`
 

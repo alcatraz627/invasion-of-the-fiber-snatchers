@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.0] — 2026-04-24
+
+### V1.1 — Jotai + TanStack Query adapters
+
+**New.** First-class adapters for the two state libraries most common in Next.js apps today. Shipped as copied runtime files — no npm dep, no patch to app code beyond a one-time registration block.
+
+**CLI additions:**
+- `fiber-snatcher atoms [name] [value-json]` — list, get, set Jotai atoms by `debugLabel`. Delegates to the adapter registered as `jotai`.
+- `fiber-snatcher queries [sub] [key-json] [data-json]` — `list`, `get`, `invalidate`, `refetch`, `reset`, `setData` for TanStack Query. Delegates to the adapter registered as `queries`.
+
+**Runtime changes:**
+- `window.__snatcher__.dispatch` is now **async-aware** — awaits adapter return values so TanStack Query's promise-returning ops (invalidate/refetch/reset) resolve cleanly.
+- `dispatch` now returns the adapter's raw result rather than `{before, after, changed}`. Use `state`/`atoms`/`queries` for read-back. Simpler shape, works for both sync and async adapters.
+- Runtime version bumped to `0.2.0`. `__snatcher__.version` is the source of truth.
+
+**Inject files added:**
+- `.fiber-snatcher/runtime/adapters/jotai.ts` — `createJotaiAdapter({ store, atoms? })`
+- `.fiber-snatcher/runtime/adapters/tanstack-query.ts` — `createTanstackQueryAdapter({ client })`
+
+**Breaking change (minor):** the generic `dispatch` CLI no longer returns `{before, after, changed}`. Callers that branched on `changed` should read state explicitly after dispatch.
+
+**Migration from 0.1.0:** re-run `fiber-snatcher init --force` in any initialized target project to copy the new adapter files and refresh `expose.ts`. Or copy `src/inject/adapters/*.ts` manually into `.fiber-snatcher/runtime/adapters/`.
+
 ## [0.1.0] — 2026-04-24
 
 ### V1 — initial release
@@ -42,15 +65,12 @@
 - MCP versions in `mcp-template.json` are initial guesses — verify with `npm view` before relying.
 - First run on a machine needs `npx playwright install chromium`.
 
-## V1.1 — planned
+## V1.2 — planned
 
-**Scope target:** adapter support for the test-case project (Jotai + TanStack Query 5).
-
-- First-class TanStack Query adapter (`fiber-snatcher queries [key]` — inspects `QueryClient`)
-- First-class Jotai adapter (`fiber-snatcher atoms` — enumerates live atoms by debugLabel)
 - Daemon poll of `next-devtools-mcp get_errors` — merges build/type/runtime errors into the unified log
 - `shoot --wait-for <selector|networkidle>` — wait gate before capture
 - Visual-diff helper (`shoot --baseline <name>`, `shoot --compare <name>`)
+- Zustand + Redux first-class adapters (today they're in-line snippets in USAGE.md §2a)
 
 ## V2 — exploratory
 
