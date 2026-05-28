@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.4.1] — 2026-05-28
+
+### Quality-of-life: dev-server-restart recovery
+
+Additive release — no breaking changes.
+
+**New — `fiber-snatcher refresh`:**
+Navigate the daemon's tab back to the configured `devUrl`. The daemon's
+Chromium is a long-lived process and doesn't track dev-server liveness; an
+`npm run dev` restart routinely parks the open tab on
+`chrome-error://chromewebdata/`, and every subsequent `state` / `eval` read
+against that page returns meaningless errors. `refresh` is the one-line
+recovery.
+
+```sh
+fiber-snatcher refresh    # → page.goto(cfg.devUrl)
+```
+
+For an explicit URL, `navigate <path>` still works.
+
+**Improved — `fiber-snatcher doctor` chrome-error detection:**
+When the daemon's `page-url` is `chrome-error://*`, doctor now marks the
+probe `ok: false` with an actionable detail (`Run \`fiber-snatcher refresh\` …`)
+and **skips the downstream `debug-surface` and `adapters` probes**. Those
+probes can only false-negative on an error page — the install isn't really
+broken, the tab just needs to navigate back. Skipping them surfaces one
+clear next step instead of a three-line cascade of red herrings.
+
+```
+page-url    ok=false  chrome-error://chromewebdata/ — daemon's tab is on
+                      an error page (typically a dev-server restart parked
+                      it here). Run `fiber-snatcher refresh` to navigate
+                      back to http://localhost:3006; probes below this
+                      depend on the page and are skipped until you do.
+```
+
 ## [0.4.0] — 2026-04-24
 
 ### New inspection primitives from the V0.3.2 feedback round

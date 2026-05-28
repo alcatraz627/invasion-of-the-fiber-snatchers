@@ -28,6 +28,7 @@ const COMMANDS = [
   "fill",
   "press",
   "navigate",
+  "refresh",
   "eval",
   "shoot",
   "errors",
@@ -70,6 +71,9 @@ DRIVE
   fill <selector> <value>   Playwright fill (dispatches input+change with bubbling)
   press <key> [--selector]  Keyboard press, optionally on a focused element
   navigate <url-or-path>    page.goto; relative paths resolved against devUrl
+  refresh                   Navigate daemon's tab back to devUrl root.
+                            Use after a dev-server restart parks the tab on
+                            chrome-error://.
   dispatch                  Pipe JSON to the default adapter
   eval <file.ts>            TS-aware: transpiles + returns last expression (--yes-i-know required)
 

@@ -34,9 +34,16 @@ export async function run(): Promise<Result> {
   })();
   probes.push({ name: "daemon", ok: daemonAlive, detail: daemonAlive ? "pid present and alive" : "not running — run `fiber-snatcher start`" });
 
-  // 4. IPC responsive
+  // 4. IPC responsive + page-url. When the daemon's tab is parked on a
+  // chrome-error://* page (typically because the dev server was restarted
+  // out from under it), every downstream probe falsely reports failure —
+  // there's no __snatcher__ on an error page, no adapters registered.
+  // Mark page-url as not-ok with an actionable hint and skip the dependent
+  // probes so the user sees ONE clear next step (`fiber-snatcher refresh`)
+  // instead of a cascade of red herrings.
   let surfacePresent = false;
   let adapters: string[] = [];
+  let onErrorPage = false;
   if (daemonAlive) {
     try {
       const res = await sendRequest(controlSocketPath(cfg), { id: "doctor-info", op: "info" }, 4000);
@@ -44,15 +51,24 @@ export async function run(): Promise<Result> {
       if (res.ok) {
         const info = res.data as { adapters?: string[]; url?: string };
         adapters = info.adapters ?? [];
-        probes.push({ name: "page-url", ok: true, detail: info.url ?? "?" });
+        const url = info.url ?? "?";
+        onErrorPage = url.startsWith("chrome-error://");
+        probes.push({
+          name: "page-url",
+          ok: !onErrorPage,
+          detail: onErrorPage
+            ? `${url} — daemon's tab is on an error page (typically a dev-server restart parked it here). Run \`fiber-snatcher refresh\` to navigate back to ${cfg.devUrl}; probes below this depend on the page and are skipped until you do.`
+            : url,
+        });
       }
     } catch (e) {
       probes.push({ name: "ipc", ok: false, detail: String((e as Error).message) });
     }
   }
 
-  // 5. debug surface
-  if (daemonAlive) {
+  // 5. debug surface — meaningless on an error page; skip rather than
+  // emit a false "not attached" that points the user at the wrong fix.
+  if (daemonAlive && !onErrorPage) {
     const res = await sendRequest(controlSocketPath(cfg), { id: "doctor-sur", op: "eval", code: `typeof window.__snatcher__ === "object" && window.__snatcher__.version` }, 4000)
       .catch((e) => ({ id: "doctor-sur", ok: false as const, error: String(e.message ?? e) }));
     if (res.ok) {
@@ -65,12 +81,15 @@ export async function run(): Promise<Result> {
     }
   }
 
-  // 6. adapters
-  probes.push({
-    name: "adapters",
-    ok: adapters.length > 0,
-    detail: adapters.length > 0 ? adapters.join(", ") : "none registered (ok if app doesn't use a store)",
-  });
+  // 6. adapters — same reason: page-url being an error page makes this
+  // report 0 adapters, which says nothing about the actual install.
+  if (!onErrorPage) {
+    probes.push({
+      name: "adapters",
+      ok: adapters.length > 0,
+      detail: adapters.length > 0 ? adapters.join(", ") : "none registered (ok if app doesn't use a store)",
+    });
+  }
 
   // 7. auth key present
   const hasKey = existsSync(cfg.authKeyPath);
