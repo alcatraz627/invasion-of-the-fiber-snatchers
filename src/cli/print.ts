@@ -12,7 +12,15 @@ export function printResponse(res: Response, json = false): number {
   if (res.ok) {
     if (res.data !== undefined) {
       const s = typeof res.data === "string" ? res.data : JSON.stringify(res.data, null, 2);
-      console.log(s);
+      // Output budget: a huge payload in a tool result is the V1 tail-pipe
+      // pathology. Cap it and tell the agent how to get the rest deliberately.
+      const CAP = 4096;
+      if (s.length > CAP) {
+        console.log(s.slice(0, CAP));
+        console.log(`… truncated ${s.length - CAP} of ${s.length} chars — re-run with --json > file, or narrow with --scope/--shallow`);
+      } else {
+        console.log(s);
+      }
     } else {
       console.log("ok");
     }

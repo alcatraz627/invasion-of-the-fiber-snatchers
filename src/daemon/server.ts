@@ -5,7 +5,8 @@
 import { promises as fs } from "node:fs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { openPersistent, controlSocketPath } from "../core/browser.ts";
+import net from "node:net";
+import { openPersistent, v2PidFile, v2SocketPath } from "../core/browser.ts";
 import { requireConfig } from "../core/config.ts";
 import { startFrameServer } from "../protocol/frames.ts";
 import type { Request, Response } from "../protocol/types.ts";
@@ -28,8 +29,23 @@ async function main() {
   const cwd = spawnCwd();
   if (cwd) process.chdir(cwd);
   const cfg = await requireConfig();
-  const sockPath = controlSocketPath(cfg);
-  if (existsSync(sockPath)) await fs.rm(sockPath, { force: true });
+  const sockPath = v2SocketPath(cfg);
+  const pidFile = v2PidFile(cfg);
+  // Only clear a DEAD socket file; a connectable one means another daemon is
+  // live and this process must bow out, not unlink it (spawn-race safety).
+  if (existsSync(sockPath)) {
+    const live = await new Promise<boolean>((resolve) => {
+      const probe = net.createConnection(sockPath);
+      const timer = setTimeout(() => { probe.destroy(); resolve(false); }, 500);
+      probe.once("connect", () => { clearTimeout(timer); probe.destroy(); resolve(true); });
+      probe.once("error", () => { clearTimeout(timer); resolve(false); });
+    });
+    if (live) {
+      console.error("another V2 daemon already serves this project; exiting");
+      process.exit(1);
+    }
+    await fs.rm(sockPath, { force: true });
+  }
 
   const runtimeBundle = await buildRuntimeBundle();
   const { context, page } = await openPersistent(cfg);
@@ -51,6 +67,16 @@ async function main() {
     gen: () => gen,
     profile: () => profile,
     log: (body) => journal.append({ cmd: "log", args: { body }, ok: true, durMs: 0 }),
+  };
+
+  // One page, one actor: verbs run strictly serialized so settle loops and the
+  // observation buffer can't steal each other's digests. Daemon-level reads
+  // (ping/info/journal) stay concurrent.
+  let actionChain: Promise<unknown> = Promise.resolve();
+  const runSerialized = <T>(fn: () => Promise<T>): Promise<T> => {
+    const p = actionChain.then(fn, fn);
+    actionChain = p.catch(() => undefined);
+    return p;
   };
 
   const server = startFrameServer(sockPath, async (req: Request): Promise<Response> => {
@@ -98,7 +124,7 @@ async function main() {
         // shoot needs the shots dir; daemon owns config, verbs stay pure.
         const args = req.cmd === "shoot" || def.name === "shoot" ? { ...req.args, shotsDir: cfg.shotsDir } : req.args;
         try {
-          const r = await runAction(deps, def, args as never);
+          const r = await runSerialized(() => runAction(deps, def, args as never));
           return {
             id: req.id,
             ok: r.ok,
@@ -122,16 +148,16 @@ async function main() {
     try { server.close(); } catch { /* already down */ }
     try { await context.close(); } catch { /* already down */ }
     try { await fs.rm(sockPath, { force: true }); } catch { /* gone */ }
-    try { await fs.rm(cfg.daemonPidFile, { force: true }); } catch { /* gone */ }
-    journal.close();
+    try { await fs.rm(pidFile, { force: true }); } catch { /* gone */ }
+    await journal.close();
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
   context.on("close", () => shutdown());
 
-  await fs.mkdir(join(cfg.daemonPidFile, ".."), { recursive: true }).catch(() => {});
-  await fs.writeFile(cfg.daemonPidFile, String(process.pid));
+  await fs.mkdir(join(pidFile, ".."), { recursive: true }).catch(() => {});
+  await fs.writeFile(pidFile, String(process.pid));
 }
 
 main().catch((e) => {

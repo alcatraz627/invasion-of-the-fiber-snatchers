@@ -6,7 +6,7 @@ import { requireConfig, ConfigError } from "../src/core/config.ts";
 import { connectDaemon } from "../src/daemon/lifecycle.ts";
 import { parseArgv, inferTarget } from "../src/cli/parse.ts";
 import { printResponse } from "../src/cli/print.ts";
-import { listActions } from "../src/actions/registry.ts";
+import { lookupAction } from "../src/actions/registry.ts";
 
 const HELP = `fs — fiber-snatcher V2 (agent-first browser + React state driver)
 
@@ -30,11 +30,19 @@ commands:
 
 async function main() {
   const argv = process.argv.slice(2);
-  const { cmd, positionals, flags } = parseArgv(argv);
+  const parsed = parseArgv(argv);
+  const { positionals, flags } = parsed;
+  // Aliases normalize to primary names so flag mapping below can't be skipped
+  // by calling a verb under its alias (snapshot/goto/screenshot).
+  const cmd = lookupAction(parsed.cmd)?.name ?? parsed.cmd;
 
   if (cmd === "help" || flags.help) {
     console.log(HELP);
     return 0;
+  }
+  if (flags.cwd !== undefined) {
+    console.log("✗ E_BAD_ARGS: --cwd is not supported in V2; run from the target project directory");
+    return 1;
   }
 
   let cfg;
@@ -48,7 +56,12 @@ async function main() {
     throw e;
   }
 
-  const client = await connectDaemon(cfg);
+  // stop must not cold-boot a browser just to kill it
+  const client = await connectDaemon(cfg, {}, { spawnIfDown: cmd !== "stop" });
+  if (!client) {
+    console.log("daemon not running");
+    return 0;
+  }
   try {
     const args: Record<string, unknown> = {};
     switch (cmd) {
@@ -63,8 +76,17 @@ async function main() {
       }
       case "fill": {
         // Last positional is the value; everything before it is the target.
-        args.value = positionals[positionals.length - 1] ?? "";
-        args.target = inferTarget(positionals.slice(0, -1).join(" ") || undefined, flags);
+        // An absent value must error, not silently clear the field.
+        const explicitValue = typeof flags.value === "string" ? flags.value : undefined;
+        const hasTargetFlag = flags.ref !== undefined || flags.css !== undefined || flags.component !== undefined;
+        const minPositionals = hasTargetFlag ? 1 : 2;
+        if (explicitValue === undefined && positionals.length < minPositionals) {
+          console.log('✗ E_BAD_ARGS: fill needs a value — `fs fill <target> "<value>"` (or --value)');
+          return 1;
+        }
+        args.value = explicitValue ?? positionals[positionals.length - 1] ?? "";
+        const targetRaw = explicitValue !== undefined ? positionals.join(" ") : positionals.slice(0, -1).join(" ");
+        args.target = inferTarget(targetRaw || undefined, flags);
         break;
       }
       case "press":
@@ -119,6 +141,3 @@ main().then(
     process.exit(1);
   }
 );
-
-// keep the import referenced for --help authoring parity with the daemon list
-void listActions;

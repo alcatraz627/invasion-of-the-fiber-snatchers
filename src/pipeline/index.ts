@@ -38,7 +38,7 @@ export function makeCtx(deps: PipelineDeps): PipelineCtx {
         const fs = (window as unknown as { __fs?: Record<string, (...a: unknown[]) => unknown> }).__fs;
         if (!fs) return { __fsMissing: true };
         const fn = fs[method];
-        if (typeof fn !== "function") throw new Error(`runtime has no method ${method}`);
+        if (typeof fn !== "function") return fn; // plain properties (docTag, version) read directly
         return fn.apply(fs, args);
       },
       { method, args }
@@ -68,13 +68,18 @@ export function makeCtx(deps: PipelineDeps): PipelineCtx {
   const resolve = async (spec: TargetSpec): Promise<ResolvedTarget> => {
     const gen = deps.gen();
     if (spec.kind === "ref") {
-      const found = await deps.page.locator(`[data-fs-ref="${spec.ref}"]`).count();
+      // Refs are e<seq>.<docTag>; a tag mismatch means the ref belongs to a
+      // dead document even if a same-named attribute exists after re-minting.
+      const currentTag = await runtime<string>("docTag").catch(() => null);
+      const refTag = spec.ref.split(".")[1];
+      const stale = currentTag !== null && refTag !== undefined && refTag !== currentTag;
+      const found = stale ? 0 : await deps.page.locator(`[data-fs-ref="${spec.ref}"]`).count();
       if (found === 0) {
-        const fresh = await runtime<TargetCandidate[]>("resolveIntent", spec.ref).catch(() => []);
         throw new FsErrorShaped({
           code: "E_TARGET_STALE",
-          message: `ref ${spec.ref} is not in the current document (generation ${gen})`,
-          candidates: fresh,
+          message: stale
+            ? `ref ${spec.ref} belongs to a previous document (current tag ${currentTag})`
+            : `ref ${spec.ref} is not in the current document (generation ${gen})`,
           hint: "re-run `fs page` and use a fresh ref",
         });
       }
@@ -107,9 +112,11 @@ export function makeCtx(deps: PipelineDeps): PipelineCtx {
       }
       const el = loc.nth(spec.nth ?? 0);
       const ref = await el.evaluate((node) => {
+        const w = node.ownerDocument.defaultView as (Window & { __fs?: { docTag: string } }) | null;
+        const tag = w?.__fs?.docTag ?? "untagged";
         let r = node.getAttribute("data-fs-ref");
-        if (!r) {
-          r = `e-css-${Math.random().toString(36).slice(2, 8)}`;
+        if (!r || !r.endsWith(`.${tag}`)) {
+          r = `ec${Math.random().toString(36).slice(2, 7)}.${tag}`;
           node.setAttribute("data-fs-ref", r);
         }
         return r;
@@ -157,9 +164,11 @@ async function describeMatches(page: Page, selector: string, count: number): Pro
     const el = page.locator(selector).nth(i);
     const desc = await el
       .evaluate((node) => {
+        const w = node.ownerDocument.defaultView as (Window & { __fs?: { docTag: string } }) | null;
+        const tag = w?.__fs?.docTag ?? "untagged";
         let r = node.getAttribute("data-fs-ref");
-        if (!r) {
-          r = `e-css-${Math.random().toString(36).slice(2, 8)}`;
+        if (!r || !r.endsWith(`.${tag}`)) {
+          r = `ec${Math.random().toString(36).slice(2, 7)}.${tag}`;
           node.setAttribute("data-fs-ref", r);
         }
         const he = node as HTMLElement;
@@ -199,10 +208,7 @@ export async function runAction<A>(deps: PipelineDeps, def: ActionDef<A>, args: 
 
     data = await def.run(ctx, args, target);
   } catch (e) {
-    error =
-      e instanceof FsErrorShaped
-        ? e.err
-        : { code: "E_INTERNAL", message: String((e as Error).message ?? e) };
+    error = e instanceof FsErrorShaped ? e.err : mapUnshapedError(e as Error);
   }
 
   // Settle + digest for mutating verbs; observations skip it (cheap reads).
@@ -225,6 +231,23 @@ export async function runAction<A>(deps: PipelineDeps, def: ActionDef<A>, args: 
   return { ok: !error, data, error, digest, target, durMs };
 }
 
+/** Playwright and DOM errors arrive unshaped; agents branch on codes, so the
+ *  common failures must map to their contract codes, first line only. */
+function mapUnshapedError(e: Error): FsError {
+  const firstLine = String(e.message ?? e).split("\n")[0] ?? "unknown error";
+  if (e.name === "TimeoutError" || firstLine.includes("Timeout") && firstLine.includes("exceeded")) {
+    return {
+      code: "E_NOT_ACTIONABLE",
+      message: firstLine,
+      hint: "element not visible/enabled/stable within the wait budget; run `fs page` to see current state",
+    };
+  }
+  if (firstLine.includes("not a valid selector") || firstLine.includes("Unexpected token") || firstLine.includes("querySelector")) {
+    return { code: "E_BAD_ARGS", message: firstLine, hint: "the CSS selector failed to parse" };
+  }
+  return { code: "E_INTERNAL", message: firstLine };
+}
+
 async function waitSettled(ctx: PipelineCtx, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -235,7 +258,7 @@ async function waitSettled(ctx: PipelineCtx, timeoutMs: number): Promise<void> {
   throw new FsErrorShaped({
     code: "E_WAIT_TIMEOUT",
     message: `queries still fetching after ${timeoutMs}ms`,
-    hint: "the app may be polling; use --no-settled to act anyway",
+    hint: "the app may be polling; `fs page` shows what is on screen right now",
   });
 }
 
@@ -252,11 +275,13 @@ async function settleAndDigest(
   let totalMutations = 0;
   const errors: string[] = [];
   let queriesPending = 0;
+  let drained = false;
 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, quietMs));
     const d = await ctx.runtime<DrainResult>("drain").catch(() => null);
-    if (!d) break; // navigation nuked the document mid-settle; digest what we have
+    if (!d) break; // navigation killed the document mid-settle; do not fabricate below
+    drained = true;
     totalMutations += d.mutationWeight;
     errors.push(...d.errors);
     queriesPending = d.queriesPending;
@@ -265,11 +290,16 @@ async function settleAndDigest(
   }
 
   const urlAfter = deps.page.url();
-  const digest: DigestDelta = {
-    mutations: totalMutations === 0 ? "none" : totalMutations < 20 ? "minor" : "major",
-    queries: queriesPending > 0 ? "pending" : "settled",
-  };
-  if (urlAfter !== urlBefore) digest.url = { from: urlBefore, to: urlAfter };
+  const urlChanged = urlAfter !== urlBefore;
+  // A digest with no successful drain is a guess, and must say so: "major" when
+  // the url proves a navigation happened, "unknown" otherwise — never "none".
+  const digest: DigestDelta = drained
+    ? {
+        mutations: totalMutations === 0 ? "none" : totalMutations < 20 ? "minor" : "major",
+        queries: queriesPending > 0 ? "pending" : "settled",
+      }
+    : { mutations: urlChanged ? "major" : "unknown" };
+  if (urlChanged) digest.url = { from: urlBefore, to: urlAfter };
   if (errors.length) digest.errors = [...new Set(errors)].slice(0, 5);
   return digest;
 }

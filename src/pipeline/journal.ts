@@ -30,8 +30,9 @@ export class Journal {
     return full;
   }
 
-  close(): void {
-    this.stream.end();
+  /** Resolves after buffered entries are flushed — await before process.exit. */
+  close(): Promise<void> {
+    return new Promise((resolve) => this.stream.end(() => resolve()));
   }
 }
 

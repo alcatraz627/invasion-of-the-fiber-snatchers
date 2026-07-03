@@ -4,7 +4,7 @@
  *  duplicate search inputs, icon-only buttons, ambiguous row labels, debounced
  *  search, delayed TanStack query, modal, tabs, 10k-row table, jotai atom. */
 
-import { StrictMode, useMemo, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Provider as JotaiProvider, atom, createStore, useAtom } from "jotai";
@@ -38,7 +38,7 @@ function SearchBox({ id, placeholder }: { id: string; placeholder: string }) {
 function PartsTable() {
   const [raw, setRaw] = useState("");
   const [debounced, setDebounced] = useState("");
-  useMemo(() => {
+  useEffect(() => {
     const t = setTimeout(() => setDebounced(raw), 250);
     return () => clearTimeout(t);
   }, [raw]);
@@ -109,7 +109,9 @@ function App() {
   );
 }
 
-const client = new QueryClient();
+// Focus-triggered refetches would make every first click look like page
+// activity; the fixture must attribute mutations to deliberate actions only.
+const client = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={client}>

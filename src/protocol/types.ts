@@ -42,8 +42,10 @@ export type DigestDelta = {
   counts?: Record<string, [number, number]>;
   errors?: string[];
   queries?: "settled" | "pending";
-  /** Dead-click signal: an action that changed nothing says so. */
-  mutations: "none" | "minor" | "major";
+  /** Dead-click signal: an action that changed nothing says so. "unknown"
+   *  means observation was impossible (document died mid-settle) — never
+   *  read it as "nothing happened". */
+  mutations: "none" | "minor" | "major" | "unknown";
 };
 
 export type Request = {

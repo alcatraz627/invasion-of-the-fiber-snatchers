@@ -43,3 +43,13 @@ export function controlSocketPath(cfg: FsConfig): string {
   // Unix domain socket in the data dir — co-located with the pid file
   return join(cfg.profileDir, "..", "control.sock");
 }
+
+/** V2 speaks a different frame protocol; separate socket + pidfile so a V1
+ *  daemon on the same project is detected, never fought for the profile. */
+export function v2SocketPath(cfg: FsConfig): string {
+  return join(cfg.profileDir, "..", "control-v2.sock");
+}
+
+export function v2PidFile(cfg: FsConfig): string {
+  return join(cfg.profileDir, "..", "daemon-v2.pid");
+}

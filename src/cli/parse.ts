@@ -10,6 +10,10 @@ export type Parsed = {
   flags: Record<string, string | number | boolean>;
 };
 
+// Value-less flags must never swallow the following positional
+// (`fs state --shallow "#x"` was silently losing its selector).
+const BOOLEAN_FLAGS = new Set(["json", "detailed", "full", "shallow", "help", "no-settled"]);
+
 export function parseArgv(argv: string[]): Parsed {
   const [cmd = "help", ...rest] = argv;
   const positionals: string[] = [];
@@ -18,9 +22,15 @@ export function parseArgv(argv: string[]): Parsed {
     const a = rest[i];
     if (a === undefined) continue;
     if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      if (eq > 2) {
+        const v = a.slice(eq + 1);
+        flags[a.slice(2, eq)] = /^-?\d+$/.test(v) ? Number(v) : v;
+        continue;
+      }
       const key = a.slice(2);
       const next = rest[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
+      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith("--")) {
         flags[key] = /^-?\d+$/.test(next) ? Number(next) : next;
         i++;
       } else {
@@ -36,7 +46,10 @@ export function parseArgv(argv: string[]): Parsed {
 // Bare capitalized words ("Search", "JEGS") are UI text, not components —
 // component inference requires the bracket form; --component forces it.
 const COMPONENT_EXPR = /^[A-Z][A-Za-z0-9_$]*\[[A-Za-z0-9_$.]+~?="[^"]*"\]$/;
-const CSS_HINT = /^[.#\[]|[>~+*]|:(nth|first|last|not|has)\b/;
+// Structural leads (".x", "#x", "[x]") always read as CSS; combinator chars
+// only when the string has no spaces — "Save + Close" and "Next >" are text.
+const CSS_LEAD = /^[.#\[]/;
+const CSS_COMBINATOR = /[>~+*]|:(nth|first|last|not|has)\b/;
 
 export function inferTarget(raw: string | undefined, flags: Parsed["flags"]): TargetSpec | undefined {
   if (typeof flags.ref === "string") return { kind: "ref", ref: flags.ref };
@@ -46,9 +59,9 @@ export function inferTarget(raw: string | undefined, flags: Parsed["flags"]): Ta
   if (typeof flags.component === "string") return { kind: "component", expr: flags.component };
   if (raw === undefined) return undefined;
 
-  if (/^e\d+$/.test(raw) || raw.startsWith("e-css-")) return { kind: "ref", ref: raw };
+  if (/^e\d+\.\w+$/.test(raw) || /^ec\w+\.\w+$/.test(raw) || /^e\d+$/.test(raw)) return { kind: "ref", ref: raw };
   if (COMPONENT_EXPR.test(raw) && !raw.includes(" ")) return { kind: "component", expr: raw };
-  if (CSS_HINT.test(raw)) {
+  if (CSS_LEAD.test(raw) || (!raw.includes(" ") && CSS_COMBINATOR.test(raw))) {
     return { kind: "css", selector: raw, nth: typeof flags.nth === "number" ? flags.nth : undefined };
   }
   return { kind: "intent", text: raw, role: typeof flags.role === "string" ? flags.role : undefined };

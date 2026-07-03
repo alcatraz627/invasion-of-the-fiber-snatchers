@@ -80,7 +80,7 @@ describe("WP0 acceptance", () => {
     expect(res.ok).toBe(true);
     const refs = res.data.interactables as Array<{ ref: string; role: string; text: string }>;
     expect(refs.length).toBeGreaterThan(5);
-    expect(refs.every((r) => /^e\d+$/.test(r.ref))).toBe(true);
+    expect(refs.every((r) => /^e\d+\.\w+$/.test(r.ref))).toBe(true); // e<seq>.<docTag>
     const tabs = refs.filter((r) => r.role === "tab");
     expect(tabs.length).toBe(3);
   }, 15_000);

@@ -139,7 +139,9 @@ function nearestComponent(el: Element): string | undefined {
 
 function isVisible(el: Element): boolean {
   const he = el as HTMLElement;
-  if (!he.offsetParent && getComputedStyle(he).position !== "fixed") return false;
+  const cs = getComputedStyle(he);
+  if (cs.visibility === "hidden" || cs.display === "none") return false;
+  if (!he.offsetParent && cs.position !== "fixed") return false;
   const r = he.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
 }
@@ -157,6 +159,17 @@ function buildRuntime() {
   const MAX_OBS = 1000;
   let refSeq = 0;
   let mutationWeight = 0;
+  // Every ref is stamped with this document's tag; a ref from a dead document
+  // fails the tag check instead of silently matching a re-minted element.
+  const docTag = Math.random().toString(36).slice(2, 6);
+  const mintRef = (el: Element): string => {
+    let ref = el.getAttribute("data-fs-ref");
+    if (!ref || !ref.endsWith(`.${docTag}`)) {
+      ref = `e${++refSeq}.${docTag}`;
+      el.setAttribute("data-fs-ref", ref);
+    }
+    return ref;
+  };
 
   function pushObs(o: Observation) {
     observations.push(o);
@@ -183,7 +196,11 @@ function buildRuntime() {
     };
   }
   const mo = new MutationObserver((muts) => {
-    mutationWeight += muts.length;
+    for (const m of muts) {
+      // Our own ref mints must not count as page activity (false dead-click signal).
+      if (m.type === "attributes" && m.attributeName === "data-fs-ref") continue;
+      mutationWeight++;
+    }
   });
   const startMo = () => {
     try {
@@ -193,11 +210,18 @@ function buildRuntime() {
     }
   };
   startMo();
+  const noteRoute = () => pushObs({ kind: "route", url: location.pathname + location.search, ts: Date.now() });
   const origPush = history.pushState.bind(history);
   history.pushState = (...args) => {
     origPush(...(args as Parameters<History["pushState"]>));
-    pushObs({ kind: "route", url: location.pathname + location.search, ts: Date.now() });
+    noteRoute();
   };
+  const origReplace = history.replaceState.bind(history);
+  history.replaceState = (...args) => {
+    origReplace(...(args as Parameters<History["replaceState"]>));
+    noteRoute();
+  };
+  window.addEventListener("popstate", noteRoute);
 
   // Adapter discovery — zero app cooperation (validated by the WP0 spike).
   function discoverAdapters(): string[] {
@@ -225,6 +249,7 @@ function buildRuntime() {
 
   const api = {
     version: RUNTIME_VERSION,
+    docTag,
 
     snapshot(opts?: { budget?: "concise" | "detailed"; scope?: string }) {
       const scopeEl = opts?.scope ? document.querySelector(opts.scope) : document.body;
@@ -233,12 +258,7 @@ function buildRuntime() {
       const els = Array.from(scopeEl.querySelectorAll(INTERACTABLE_SELECTOR)).filter(isVisible);
       const cap = detailed ? 250 : 80;
       const interactables = els.slice(0, cap).map((el) => {
-        let ref = el.getAttribute("data-fs-ref");
-        if (!ref) {
-          ref = `e${++refSeq}`;
-          el.setAttribute("data-fs-ref", ref);
-        }
-        const entry: Record<string, unknown> = { ref, role: roleOf(el), text: labelOf(el) };
+        const entry: Record<string, unknown> = { ref: mintRef(el), role: roleOf(el), text: labelOf(el) };
         if (detailed) {
           const comp = nearestComponent(el);
           if (comp) entry.component = comp;
@@ -270,41 +290,42 @@ function buildRuntime() {
         .filter((x): x is NonNullable<typeof x> => !!x && x.score > 0.3)
         .sort((a, b) => b.score - a.score)
         .slice(0, 8);
-      return scored.map((s) => {
-        let ref = s.el.getAttribute("data-fs-ref");
-        if (!ref) {
-          ref = `e${++refSeq}`;
-          s.el.setAttribute("data-fs-ref", ref);
-        }
-        return { ref, role: s.role, text: s.text, component: nearestComponent(s.el), confidence: Number(s.score.toFixed(2)) };
-      });
+      return scored.map((s) => ({
+        ref: mintRef(s.el),
+        role: s.role,
+        text: s.text,
+        component: nearestComponent(s.el),
+        confidence: Number(s.score.toFixed(2)),
+      }));
     },
 
     resolveComponent(expr: string) {
       const parsed = parseComponentExpr(expr);
       if (!parsed) return { error: `bad component expr: ${expr}` };
       const hits: Array<{ ref: string; role: string; text: string; component: string; confidence: number }> = [];
-      const seenEls = new Set<Element>();
+      // One hit per component INSTANCE: dedupe by the matched fiber (and its
+      // work-in-progress alternate), anchored at its first host element in
+      // document order. Element-keyed dedupe returned N phantom candidates
+      // for a single mounted component.
+      const seenFibers = new WeakSet<Fiber>();
       for (const el of Array.from(document.querySelectorAll("*"))) {
         if (hits.length >= 8) break;
         let f = fiberOf(el);
         let guard = 0;
         while (f && guard++ < 25) {
           if (displayName(f.type) === parsed.name) {
+            const alt = (f as { alternate?: Fiber | null }).alternate;
+            if (seenFibers.has(f) || (alt && seenFibers.has(alt))) break;
             const props = (f.memoizedProps ?? {}) as Record<string, unknown>;
             let ok = true;
             if (parsed.prop) {
               const v = String(props[parsed.prop] ?? "");
               ok = parsed.op === "~=" ? v.toLowerCase().includes(parsed.value!.toLowerCase()) : v === parsed.value;
             }
-            if (ok && !seenEls.has(el) && isVisible(el)) {
-              seenEls.add(el);
-              let ref = el.getAttribute("data-fs-ref");
-              if (!ref) {
-                ref = `e${++refSeq}`;
-                el.setAttribute("data-fs-ref", ref);
-              }
-              hits.push({ ref, role: roleOf(el), text: labelOf(el), component: parsed.name, confidence: 1 });
+            if (ok && isVisible(el)) {
+              seenFibers.add(f);
+              if (alt) seenFibers.add(alt);
+              hits.push({ ref: mintRef(el), role: roleOf(el), text: labelOf(el), component: parsed.name, confidence: 1 });
             }
             break;
           }

@@ -2,7 +2,7 @@
 
 This project has exactly ONE environment variable: `FS_CONFIG_CWD`, the
 spawn-time handshake that tells a detached daemon which project directory it
-serves (set by `lifecycle.ensureDaemon`, read once at the daemon entry).
+serves (set by `lifecycle.connectDaemon`, read once at the daemon entry).
 
 Rules:
 - All other configuration flows through `.fiber-snatcher/config.json`
