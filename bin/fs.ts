@@ -6,9 +6,14 @@ import { requireConfig, ConfigError } from "../src/core/config.ts";
 import { connectDaemon } from "../src/daemon/lifecycle.ts";
 import { parseArgv, inferTarget } from "../src/cli/parse.ts";
 import { printResponse } from "../src/cli/print.ts";
-import { lookupAction } from "../src/actions/registry.ts";
+import { lookupAction, listActions } from "../src/actions/registry.ts";
+import { runDoctorCli, renderDoctor } from "../src/actions/doctor.ts";
 
-const HELP = `fs — fiber-snatcher V2 (agent-first browser + React state driver)
+/** Help is generated from the registry so the commands list can't drift from
+ *  the verb table (WP0 shipped it hand-written and already out of sync). The
+ *  header, daemon commands, and targets stay hand-written. */
+function buildHelp(): string {
+  const header = `fs — fiber-snatcher V2 (agent-first browser + React state driver)
 
 usage: fs <command> [target] [args] [--flags]
 
@@ -16,17 +21,28 @@ targets (inferred; force with --ref/--css/--component):
   e12                     ref from a previous \`fs page\`
   "Export"                intent text (role+text match)
   'JobRow[title~="X"]'    component expression (fiber)
-  '.toolbar button'       CSS (add --nth N if ambiguous)
+  '.toolbar button'       CSS (add --nth N if ambiguous)`;
 
-commands:
-  navigate <url>          open url/path        reload            hard reload
-  click <target>          click it             fill <t> <value>  fill input
-  press <key> [target]    keyboard             page [--detailed] snapshot+refs
-  state [selector]        fiber state          shoot [--selector] screenshot
-  eval <code|->           run JS (- = stdin)   info              daemon status
-  actions                 verb list            journal [--last N] action log
-  profile <name>          telemetry profile    stop              kill daemon
-  --json on anything      raw Response envelope`;
+  const verbs = listActions();
+  const width = Math.min(26, Math.max(...verbs.map((v) => verbLabel(v).length)) + 2);
+  const commands = verbs.map((v) => `  ${verbLabel(v).padEnd(width)}${v.summary}`).join("\n");
+
+  const daemon = `daemon:
+  info                    daemon + runtime status
+  journal [--last N]      recent action log
+  profile <name>          telemetry profile (explore|debug|verify|minimal)
+  actions                 machine-readable verb list
+  stop                    shut the daemon down`;
+
+  const footer = `aliases show in (parens) and normalize to the primary verb.
+--json on any command prints the raw Response envelope.`;
+
+  return `${header}\n\ncommands:\n${commands}\n\n${daemon}\n\n${footer}`;
+}
+
+function verbLabel(v: { name: string; aliases?: string[] }): string {
+  return v.aliases?.length ? `${v.name} (${v.aliases.join(", ")})` : v.name;
+}
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -37,12 +53,21 @@ async function main() {
   const cmd = lookupAction(parsed.cmd)?.name ?? parsed.cmd;
 
   if (cmd === "help" || flags.help) {
-    console.log(HELP);
+    console.log(buildHelp());
     return 0;
   }
   if (flags.cwd !== undefined) {
     console.log("✗ E_BAD_ARGS: --cwd is not supported in V2; run from the target project directory");
     return 1;
+  }
+
+  // doctor diagnoses the environment, so it must NOT auto-start the daemon —
+  // it runs its own probes and only queries the daemon if already up.
+  if (cmd === "doctor") {
+    const { healthy, probes } = await runDoctorCli();
+    if (flags.json) console.log(JSON.stringify({ ok: healthy, data: { healthy, probes } }, null, 2));
+    else console.log(renderDoctor(probes, healthy));
+    return healthy ? 0 : 1;
   }
 
   let cfg;
@@ -118,6 +143,26 @@ async function main() {
       case "profile":
         if (positionals[0]) args.profile = positionals[0];
         break;
+      case "routes":
+        break;
+      case "remount":
+        args.reset = !!flags.reset;
+        break;
+      case "count":
+        args.selector = positionals[0];
+        break;
+      case "queries":
+        if (positionals[0]) args.filter = positionals[0];
+        break;
+      case "atoms":
+        if (positionals[0]) args.name = positionals[0];
+        break;
+      case "dispatch": {
+        const raw = positionals.join(" ");
+        args.action = raw === "-" || raw === "" ? await Bun.stdin.text() : raw;
+        if (typeof flags.adapter === "string") args.adapter = flags.adapter;
+        break;
+      }
       case "stop":
         break;
       default:
