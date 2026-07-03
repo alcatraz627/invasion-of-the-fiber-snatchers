@@ -18,7 +18,8 @@ import type { FsConfig } from "./config.ts";
 
 export async function openPersistent(cfg: FsConfig): Promise<{ context: BrowserContext; page: Page }> {
   const context = await chromium.launchPersistentContext(cfg.profileDir, {
-    headless: false,
+    // Config field, not env: test harnesses set headless per-project
+    headless: cfg.headless === true,
     viewport: { width: 1400, height: 900 },
     // Inject auth bypass header for every request if target opted in
     extraHTTPHeaders: await maybeAuthHeader(cfg),

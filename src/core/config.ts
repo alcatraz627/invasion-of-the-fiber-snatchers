@@ -15,6 +15,7 @@ export type FsConfig = {
   shotsDir: string;
   logsDir: string;
   daemonPidFile: string;
+  headless?: boolean;         // test harnesses set this; interactive use stays headful
   cdpPortHint: number;        // port we ask Playwright to expose CDP on (best-effort)
   sources: {
     nextDevCommand: string;   // e.g. "npm run dev"
