@@ -33,7 +33,9 @@ export function parseArgv(argv: string[]): Parsed {
   return { cmd, positionals, flags };
 }
 
-const COMPONENT_EXPR = /^[A-Z][A-Za-z0-9_$]*(\[[A-Za-z0-9_$.]+~?="[^"]*"\])?$/;
+// Bare capitalized words ("Search", "JEGS") are UI text, not components —
+// component inference requires the bracket form; --component forces it.
+const COMPONENT_EXPR = /^[A-Z][A-Za-z0-9_$]*\[[A-Za-z0-9_$.]+~?="[^"]*"\]$/;
 const CSS_HINT = /^[.#\[]|[>~+*]|:(nth|first|last|not|has)\b/;
 
 export function inferTarget(raw: string | undefined, flags: Parsed["flags"]): TargetSpec | undefined {
