@@ -6,16 +6,42 @@ import { promises as fs } from "node:fs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import net from "node:net";
+import type { Page } from "playwright";
 import { openPersistent, v2PidFile, v2SocketPath } from "../core/browser.ts";
 import { requireConfig } from "../core/config.ts";
 import { startFrameServer } from "../protocol/frames.ts";
-import type { Request, Response } from "../protocol/types.ts";
+import type { DigestDelta, Request, Response } from "../protocol/types.ts";
 import { lookupAction, listActions } from "../actions/registry.ts";
 import { runAction, type PipelineDeps } from "../pipeline/index.ts";
 import { Journal, readJournal } from "../pipeline/journal.ts";
 import { FsErrorShaped, type TelemetryProfile } from "../pipeline/contracts.ts";
 import { RUNTIME_VERSION } from "../page-runtime/version.ts";
+import { attachScreencast, resolveScreencastOptions } from "./screencast.ts";
 import { spawnCwd } from "./env.ts";
+
+/** minimal profile: strip the digest to the dead-click signal + errors so a
+ *  terse-T0 session pays no attention tax on surfaces/counts/focus/queries. */
+function terseDigest(d: DigestDelta): DigestDelta {
+  const t: DigestDelta = { mutations: d.mutations };
+  if (d.errors?.length) t.errors = d.errors;
+  return t;
+}
+
+/** explore profile: the T1 interactable count handed back after a navigation so
+ *  the agent knows what `fs page` would surface without paying for it yet. */
+async function interactableCount(page: Page): Promise<number | null> {
+  return await page
+    .evaluate(() => {
+      const runtime = (window as unknown as { __fs?: { snapshot?: (o: unknown) => { interactables?: unknown[] } } }).__fs;
+      try {
+        const snap = runtime?.snapshot?.({ budget: "concise" });
+        return snap && Array.isArray(snap.interactables) ? snap.interactables.length : null;
+      } catch {
+        return null;
+      }
+    })
+    .catch(() => null);
+}
 
 async function buildRuntimeBundle(): Promise<string> {
   const entry = new URL("../page-runtime/index.ts", import.meta.url).pathname;
@@ -51,9 +77,18 @@ async function main() {
   const { context, page } = await openPersistent(cfg);
   await context.addInitScript(runtimeBundle);
 
+  // The rolling screencast is attached now but stays OFF until a `profile debug`
+  // or a `record` turns it on — capture has a memory/CPU cost we don't pay by
+  // default. It re-arms itself after each navigation (Chrome can pause the stream
+  // across a cross-document nav).
+  const screencast = attachScreencast(page, resolveScreencastOptions(cfg.screencast));
+
   let gen = 0;
   page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) gen++;
+    if (frame === page.mainFrame()) {
+      gen++;
+      void screencast.onNavigated();
+    }
   });
 
   await page.goto(cfg.devUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
@@ -90,7 +125,7 @@ async function main() {
         return {
           id: req.id,
           ok: true,
-          data: { url: page.url(), title: await page.title().catch(() => ""), gen, runtimeVersion, daemonRuntime: RUNTIME_VERSION, profile },
+          data: { url: page.url(), title: await page.title().catch(() => ""), gen, runtimeVersion, daemonRuntime: RUNTIME_VERSION, profile, screencast: screencast.stats() },
           gen,
         };
       }
@@ -102,8 +137,14 @@ async function main() {
       }
       case "profile": {
         const next = req.args.profile as TelemetryProfile | undefined;
-        if (next) profile = next;
-        return { id: req.id, ok: true, data: { profile } };
+        if (next) {
+          profile = next;
+          // debug wants the ring for `shoot --at`; minimal force-stops capture.
+          // explore/verify leave the ring in whatever state it was.
+          if (profile === "debug") await screencast.start().catch(() => {});
+          else if (profile === "minimal") await screencast.stop().catch(() => {});
+        }
+        return { id: req.id, ok: true, data: { profile, screencast: screencast.stats() } };
       }
       case "close":
         setTimeout(() => shutdown(), 50);
@@ -121,19 +162,38 @@ async function main() {
             },
           };
         }
-        // shoot needs the shots dir; daemon owns config, verbs stay pure.
-        const args = req.cmd === "shoot" || def.name === "shoot" ? { ...req.args, shotsDir: cfg.shotsDir } : req.args;
+        // shoot/look/record write under the shots dir; daemon owns config, verbs
+        // stay pure. The screencast controller is reached off the page (WeakMap).
+        const needsShots = def.name === "shoot" || def.name === "look" || def.name === "record";
+        const args = needsShots ? { ...req.args, shotsDir: cfg.shotsDir } : req.args;
         try {
           const r = await runSerialized(() => runAction(deps, def, args as never));
-          return {
-            id: req.id,
-            ok: r.ok,
-            data: r.data,
-            error: r.error,
-            digest: r.digest,
-            gen,
-            next_steps: r.error?.hint ? [r.error.hint] : undefined,
-          };
+          let { ok, data, error, digest } = r;
+          let next_steps = error?.hint ? [error.hint] : undefined;
+
+          // Profile shapes the T0 emit WITHOUT touching the pipeline: minimal
+          // trims the digest, verify fails on recorded errors, explore annotates
+          // navigations. debug's extra verbosity (observation digests, ring) is
+          // already handled in the pipeline + the profile handler above.
+          if (digest && profile === "minimal") digest = terseDigest(digest);
+
+          if (profile === "verify" && ok && digest?.errors?.length) {
+            const errs = digest.errors;
+            error = {
+              code: "E_INTERNAL",
+              message: `verify: ${errs.length} console error(s)/remount during \`${def.name}\`: ${errs.slice(0, 3).join(" | ")}`,
+              hint: "verify fails any action that logs a console error or triggers a remount; use `explore` to observe without failing",
+            };
+            ok = false;
+            next_steps = [error.hint!];
+          }
+
+          if (profile === "explore" && ok && (def.name === "navigate" || def.name === "reload")) {
+            const count = await interactableCount(page);
+            if (count !== null) next_steps = [`${count} interactables on the new page — run \`fs page\` for their refs`];
+          }
+
+          return { id: req.id, ok, data, error, digest, gen, next_steps };
         } catch (e) {
           const err = e instanceof FsErrorShaped ? e.err : { code: "E_INTERNAL" as const, message: String((e as Error).message ?? e) };
           return { id: req.id, ok: false, error: err, gen };
@@ -145,6 +205,7 @@ async function main() {
   server.listen(sockPath);
 
   const shutdown = async () => {
+    try { await screencast.stop(); } catch { /* finalizes any recording */ }
     try { server.close(); } catch { /* already down */ }
     try { await context.close(); } catch { /* already down */ }
     try { await fs.rm(sockPath, { force: true }); } catch { /* gone */ }
