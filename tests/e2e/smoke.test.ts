@@ -27,14 +27,31 @@ type Envelope = {
   gen?: number;
 };
 
+// Mirrors harness.ts's hardened runner (this file keeps its own copy so the
+// cold-start test can observe a genuinely cold daemon): per-call timeout,
+// stderr capture, one retry on empty stdout (perf-audit fix-now #1).
+const CALL_TIMEOUT_MS = 45_000;
+async function spawnOnce(argv: string[]): Promise<{ out: string; err: string }> {
+  const proc = Bun.spawn(["bun", FS_BIN, ...argv], { cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+  const killer = setTimeout(() => proc.kill(), CALL_TIMEOUT_MS);
+  try {
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    await proc.exited;
+    return { out, err };
+  } finally {
+    clearTimeout(killer);
+  }
+}
+
 async function fs(...argv: string[]): Promise<Envelope> {
-  const proc = Bun.spawn(["bun", FS_BIN, ...argv, "--json"], {
-    cwd: projectDir,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const out = await new Response(proc.stdout).text();
-  await proc.exited;
+  const first = await spawnOnce([...argv, "--json"]);
+  let out = first.out;
+  if (out.trim() === "") {
+    await new Promise((r) => setTimeout(r, 1500));
+    const second = await spawnOnce([...argv, "--json"]);
+    out = second.out;
+    if (out.trim() === "") throw new Error(`fs produced no stdout after retry; stderr: ${(second.err || first.err).slice(0, 400)}`);
+  }
   try {
     return JSON.parse(out) as Envelope;
   } catch {

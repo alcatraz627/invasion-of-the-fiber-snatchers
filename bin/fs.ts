@@ -227,8 +227,18 @@ async function main() {
   // connect/read/unsubscribe loop rather than the one-shot request path below.
   if (cmd === "watch") return await runWatch(cfg, parsed);
 
-  // stop must not cold-boot a browser just to kill it
-  const client = await connectDaemon(cfg, {}, { spawnIfDown: cmd !== "stop" });
+  // stop must not cold-boot a browser just to kill it. A boot failure must
+  // still land a shaped envelope on STDOUT — a --json consumer that gets empty
+  // stdout has nothing to branch on (the perf audit's flake root cause).
+  let client;
+  try {
+    client = await connectDaemon(cfg, {}, { spawnIfDown: cmd !== "stop" });
+  } catch (e) {
+    const err = { code: "E_DAEMON_DOWN" as const, message: String((e as Error).message ?? e).split("\n")[0] ?? "daemon boot failed", hint: "retry once; if it persists run `fs doctor`" };
+    if (flags.json) console.log(JSON.stringify({ ok: false, error: err }, null, 2));
+    else console.log(`✗ ${err.code}: ${err.message}\n→ ${err.hint}`);
+    return 1;
+  }
   if (!client) {
     console.log("daemon not running");
     return 0;

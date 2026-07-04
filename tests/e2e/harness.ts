@@ -56,11 +56,29 @@ export async function startTarget(): Promise<Target> {
     })
   );
 
-  const fsRaw = async (...argv: string[]): Promise<string> => {
+  // Per-call timeout + stderr capture + one retry on empty stdout: a cold boot
+  // that exceeds the daemon's boot budget under machine load must cost one
+  // retried call, not a whole-suite hang (perf-audit fix-now #1).
+  const CALL_TIMEOUT_MS = 45_000;
+  const spawnOnce = async (argv: string[]): Promise<{ out: string; err: string }> => {
     const proc = Bun.spawn(["bun", FS_BIN, ...argv], { cwd: dir, stdout: "pipe", stderr: "pipe" });
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-    return out;
+    const killer = setTimeout(() => proc.kill(), CALL_TIMEOUT_MS);
+    try {
+      const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+      await proc.exited;
+      return { out, err };
+    } finally {
+      clearTimeout(killer);
+    }
+  };
+
+  const fsRaw = async (...argv: string[]): Promise<string> => {
+    const first = await spawnOnce(argv);
+    if (first.out.trim() !== "") return first.out;
+    await new Promise((r) => setTimeout(r, 1500));
+    const second = await spawnOnce(argv);
+    if (second.out.trim() !== "") return second.out;
+    throw new Error(`fs produced no stdout after retry; stderr: ${(second.err || first.err).slice(0, 400)}`);
   };
 
   const fs = async (...argv: string[]): Promise<Envelope> => {
