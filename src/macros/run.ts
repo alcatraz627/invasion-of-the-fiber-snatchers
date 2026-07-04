@@ -17,7 +17,9 @@ import type { ExpectSpec, Macro, MacroStep, StepTarget } from "./format.ts";
  *  back — a cycle) and so tests can supply a fake verb table. */
 export type MacroDeps = {
   journal: Journal;
-  lookup: (name: string) => ActionDef | undefined;
+  // The registry types verbs as ActionDef<never> and casts args at the call
+  // boundary (as server.ts does); mirror that here.
+  lookup: (name: string) => ActionDef<never> | undefined;
 };
 
 export type ExpectResult = { kind: string; ok: boolean; detail?: string };
