@@ -10,8 +10,9 @@ import type { Page } from "playwright";
 import { openPersistent, v2PidFile, v2SocketPath } from "../core/browser.ts";
 import { requireConfig } from "../core/config.ts";
 import { startFrameServer } from "../protocol/frames.ts";
-import type { DigestDelta, Request, Response } from "../protocol/types.ts";
+import type { DigestDelta, PushEvent, Request, Response } from "../protocol/types.ts";
 import { lookupAction, listActions } from "../actions/registry.ts";
+import { attachNetworkObserver, matchUrl, type NetEvent, type NetworkObserver } from "../actions/network.ts";
 import { runAction, type PipelineDeps } from "../pipeline/index.ts";
 import { Journal, readJournal } from "../pipeline/journal.ts";
 import { FsErrorShaped, type TelemetryProfile } from "../pipeline/contracts.ts";
@@ -41,6 +42,98 @@ async function interactableCount(page: Page): Promise<number | null> {
       }
     })
     .catch(() => null);
+}
+
+/** Live subscriptions for `watch console|route|network`. A watch keeps its CLI
+ *  connection open and streams push events until it unwatches or disconnects.
+ *  The hub attaches a page/observer listener on the FIRST subscription of a kind
+ *  and detaches it on the LAST, so an idle daemon does no watch work. Events fan
+ *  out to every connected client (frames.ts broadcasts); a one-shot CLI has no
+ *  onPush handler and drops them, so only the watching CLI reacts. */
+class WatchHub {
+  private emit: ((e: PushEvent) => void) | null = null;
+  private seq = 0;
+  private consoleSubs = new Map<string, { level?: string }>();
+  private routeSubs = new Map<string, {}>();
+  private netSubs = new Map<string, { match?: (url: string) => boolean }>();
+  private consoleOff: (() => void) | null = null;
+  private routeOff: (() => void) | null = null;
+  private netOff: (() => void) | null = null;
+
+  constructor(private page: Page, private gen: () => number, private net: NetworkObserver) {}
+
+  /** The push fan-out is the same function every request (frames.ts owns it), so
+   *  binding it each call is idempotent — it just captures it for the listeners. */
+  bindEmit(emit: (e: PushEvent) => void): void {
+    this.emit = emit;
+  }
+
+  add(kind: string, opts: { level?: string; match?: (url: string) => boolean }): { watchId: string; kind: string } {
+    const watchId = `w${Date.now().toString(36)}-${++this.seq}`;
+    if (kind === "console") {
+      this.consoleSubs.set(watchId, { level: opts.level });
+      this.ensureConsole();
+    } else if (kind === "route") {
+      this.routeSubs.set(watchId, {});
+      this.ensureRoute();
+    } else if (kind === "network") {
+      this.netSubs.set(watchId, { match: opts.match });
+      this.ensureNet();
+    } else {
+      throw new FsErrorShaped({ code: "E_BAD_ARGS", message: `unknown watch kind: ${kind}`, hint: "watch console | route | network" });
+    }
+    return { watchId, kind };
+  }
+
+  remove(watchId: string): boolean {
+    let removed = false;
+    if (this.consoleSubs.delete(watchId)) { removed = true; if (this.consoleSubs.size === 0) this.detachConsole(); }
+    if (this.routeSubs.delete(watchId)) { removed = true; if (this.routeSubs.size === 0) this.detachRoute(); }
+    if (this.netSubs.delete(watchId)) { removed = true; if (this.netSubs.size === 0) this.detachNet(); }
+    return removed;
+  }
+
+  private ensureConsole(): void {
+    if (this.consoleOff) return;
+    // A console message emits once if any active sub would accept its level; each
+    // CLI still applies its own --level, so multiple watchers don't multiply it.
+    const onConsole = (msg: { type(): string; text(): string }) => this.emitConsole(msg.type(), msg.text());
+    const onPageError = (err: Error) => this.emitConsole("error", err.message);
+    this.page.on("console", onConsole);
+    this.page.on("pageerror", onPageError);
+    this.consoleOff = () => { this.page.off("console", onConsole); this.page.off("pageerror", onPageError); };
+  }
+
+  private emitConsole(level: string, body: string): void {
+    const anyAll = [...this.consoleSubs.values()].some((s) => !s.level);
+    const wanted = anyAll || [...this.consoleSubs.values()].some((s) => s.level === level);
+    if (wanted) this.emit?.({ event: "console", level, body, ts: new Date().toISOString() });
+  }
+
+  private ensureRoute(): void {
+    if (this.routeOff) return;
+    const onNav = (frame: { url(): string }) => {
+      if (frame === this.page.mainFrame()) this.emit?.({ event: "route", url: this.page.url(), gen: this.gen(), ts: new Date().toISOString() });
+    };
+    this.page.on("framenavigated", onNav);
+    this.routeOff = () => this.page.off("framenavigated", onNav);
+  }
+
+  private ensureNet(): void {
+    if (this.netOff) return;
+    this.netOff = this.net.subscribe((e: NetEvent) => this.emitNet(e));
+  }
+
+  private emitNet(e: NetEvent): void {
+    for (const [watchId, sub] of this.netSubs) {
+      if (sub.match && !sub.match(e.url)) continue;
+      this.emit?.({ event: "watch", watchId, payload: { kind: "network", phase: e.phase, method: e.method, url: e.url, status: e.status ?? null, ok: e.ok }, ts: new Date().toISOString() });
+    }
+  }
+
+  private detachConsole(): void { this.consoleOff?.(); this.consoleOff = null; }
+  private detachRoute(): void { this.routeOff?.(); this.routeOff = null; }
+  private detachNet(): void { this.netOff?.(); this.netOff = null; }
 }
 
 async function buildRuntimeBundle(): Promise<string> {
@@ -82,6 +175,10 @@ async function main() {
   // default. It re-arms itself after each navigation (Chrome can pause the stream
   // across a cross-document nav).
   const screencast = attachScreencast(page, resolveScreencastOptions(cfg.screencast));
+  // Watches network traffic for the whole daemon life: `wait --call` reads its
+  // recent-request buffer, `watch network` streams it, and `profile verify`
+  // drains its error log into a failing verb's digest.
+  const netObserver = attachNetworkObserver(page);
 
   let gen = 0;
   page.on("framenavigated", (frame) => {
@@ -90,6 +187,8 @@ async function main() {
       void screencast.onNavigated();
     }
   });
+
+  const watches = new WatchHub(page, () => gen, netObserver);
 
   await page.goto(cfg.devUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
 
@@ -114,10 +213,30 @@ async function main() {
     return p;
   };
 
-  const server = startFrameServer(sockPath, async (req: Request): Promise<Response> => {
+  const server = startFrameServer(sockPath, async (req: Request, push: (e: PushEvent) => void): Promise<Response> => {
+    // `watch` streams events over server-push; bind the fan-out (stable across
+    // requests) so the hub's page listeners can reach it.
+    watches.bindEmit(push);
     switch (req.cmd) {
       case "ping":
         return { id: req.id, ok: true, data: { pid: process.pid, runtime: RUNTIME_VERSION, gen } };
+      case "watch": {
+        const kind = req.args.kind as string | undefined;
+        if (!kind) return { id: req.id, ok: false, error: { code: "E_BAD_ARGS", message: "watch needs a kind", hint: "watch console | route | network" } };
+        try {
+          const match = typeof req.args.pattern === "string" ? matchUrl(req.args.pattern) : undefined;
+          const { watchId } = watches.add(kind, { level: req.args.level as string | undefined, match });
+          return { id: req.id, ok: true, data: { watchId, kind, pattern: req.args.pattern ?? null } };
+        } catch (e) {
+          const err = e instanceof FsErrorShaped ? e.err : { code: "E_INTERNAL" as const, message: String((e as Error).message ?? e) };
+          return { id: req.id, ok: false, error: err };
+        }
+      }
+      case "unwatch": {
+        const watchId = req.args.watchId as string | undefined;
+        const removed = watchId ? watches.remove(watchId) : false;
+        return { id: req.id, ok: true, data: { unwatched: removed, watchId: watchId ?? null } };
+      }
       case "info": {
         const runtimeVersion = await page
           .evaluate(() => (window as unknown as { __fs?: { version: string } }).__fs?.version ?? null)
@@ -166,10 +285,22 @@ async function main() {
         // stay pure. The screencast controller is reached off the page (WeakMap).
         const needsShots = def.name === "shoot" || def.name === "look" || def.name === "record";
         const args = needsShots ? { ...req.args, shotsDir: cfg.shotsDir } : req.args;
+        // Mark the network-error log before the action so we attribute only the
+        // failures this action caused, not stale ones from earlier traffic.
+        const netMark = netObserver.errorMark();
         try {
           const r = await runSerialized(() => runAction(deps, def, args as never));
           let { ok, data, error, digest } = r;
           let next_steps = error?.hint ? [error.hint] : undefined;
+
+          // A request that 500s or fails during the action is a real error, so
+          // fold it into the digest. verify (below) then fails the action on it;
+          // other profiles just surface it. Only mutating verbs carry a digest to
+          // fold into — observation reads don't trigger app traffic.
+          const netErrs = netObserver.errorsSince(netMark);
+          if (netErrs.length && digest) {
+            digest = { ...digest, errors: [...new Set([...(digest.errors ?? []), ...netErrs])].slice(0, 5) };
+          }
 
           // Profile shapes the T0 emit WITHOUT touching the pipeline: minimal
           // trims the digest, verify fails on recorded errors, explore annotates

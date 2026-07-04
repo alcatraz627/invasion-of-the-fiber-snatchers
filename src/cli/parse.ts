@@ -12,7 +12,7 @@ export type Parsed = {
 
 // Value-less flags must never swallow the following positional
 // (`fs state --shallow "#x"` was silently losing its selector).
-const BOOLEAN_FLAGS = new Set(["json", "detailed", "full", "shallow", "help", "settled", "network-idle"]);
+const BOOLEAN_FLAGS = new Set(["json", "detailed", "full", "shallow", "help", "settled", "network-idle", "done", "all"]);
 
 export function parseArgv(argv: string[]): Parsed {
   const [cmd = "help", ...rest] = argv;

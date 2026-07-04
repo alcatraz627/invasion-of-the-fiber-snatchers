@@ -9,6 +9,9 @@ import { printResponse } from "../src/cli/print.ts";
 import { lookupAction, listActions } from "../src/actions/registry.ts";
 import { runDoctorCli, renderDoctor } from "../src/actions/doctor.ts";
 import { DEFAULT_WAIT_TIMEOUT_MS } from "../src/pipeline/waits.ts";
+import type { FsConfig } from "../src/core/config.ts";
+import type { PushEvent } from "../src/protocol/types.ts";
+import type { Parsed } from "../src/cli/parse.ts";
 
 /** Help is generated from the registry so the commands list can't drift from
  *  the verb table (WP0 shipped it hand-written and already out of sync). The
@@ -100,13 +103,96 @@ function buildExpectSpec(positionals: string[], flags: Record<string, string | n
   return spec;
 }
 
+/** `watch console|route|network` holds the daemon connection open and prints
+ *  push events as they arrive until Ctrl-C or `--for <ms>`. This is the CLI half
+ *  of server-push: a subscribe request, then a long-lived read loop, then an
+ *  unsubscribe. Event lines go to stdout (pipeable); the status banner goes to
+ *  stderr so it never pollutes the stream. */
+async function runWatch(cfg: FsConfig, parsed: Parsed): Promise<number> {
+  const { positionals, flags } = parsed;
+  const kind = positionals[0];
+  if (!kind || !["console", "route", "network"].includes(kind)) {
+    console.log("✗ E_BAD_ARGS: watch needs a kind — `fs watch console|route|network [--level error] [--for <ms>]`");
+    return 1;
+  }
+  const pattern = kind === "network" ? (typeof flags.pattern === "string" ? flags.pattern : positionals[1]) : undefined;
+  const level = typeof flags.level === "string" ? flags.level : undefined;
+  const forMs = typeof flags.for === "number" ? flags.for : undefined;
+  const json = !!flags.json;
+
+  let myWatchId: string | undefined;
+  const onPush = (e: PushEvent) => {
+    if (json) {
+      // Only the events this watch asked for; other watchers' pushes share the socket.
+      if (matchesKind(e, kind, myWatchId)) console.log(JSON.stringify(e));
+      return;
+    }
+    const line = formatPush(e, kind, level, myWatchId);
+    if (line) console.log(line);
+  };
+
+  const client = await connectDaemon(cfg, { onPush }, { spawnIfDown: true });
+  if (!client) {
+    console.log("daemon not running");
+    return 0;
+  }
+  const res = await client.request("watch", { kind, pattern, level });
+  if (!res.ok) {
+    printResponse(res, json);
+    client.close();
+    return 1;
+  }
+  myWatchId = (res.data as { watchId?: string } | undefined)?.watchId;
+  console.error(`watching ${kind}${pattern ? ` ${pattern}` : ""} (${myWatchId}) — ${forMs ? `${forMs}ms then stop` : "Ctrl-C to stop"}`);
+
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => { if (done) return; done = true; resolve(); };
+    if (forMs) setTimeout(finish, forMs);
+    process.on("SIGINT", finish);
+    process.on("SIGTERM", finish);
+  });
+
+  if (myWatchId) await client.request("unwatch", { watchId: myWatchId }).catch(() => {});
+  client.close();
+  return 0;
+}
+
+/** Does this push belong to the given watch? console/route match by event type
+ *  (one page, so all of them are ours); network matches our watchId. */
+function matchesKind(e: PushEvent, kind: string, watchId?: string): boolean {
+  if (kind === "console") return e.event === "console";
+  if (kind === "route") return e.event === "route";
+  if (kind === "network") return e.event === "watch" && (e as { watchId?: string }).watchId === watchId;
+  return false;
+}
+
+function formatPush(e: PushEvent, kind: string, level: string | undefined, watchId?: string): string | null {
+  if (!matchesKind(e, kind, watchId)) return null;
+  if (e.event === "console") {
+    if (level && e.level !== level) return null;
+    return `console [${e.level}] ${e.body}`;
+  }
+  if (e.event === "route") return `route → ${e.url} (gen ${e.gen})`;
+  if (e.event === "watch") {
+    const p = e.payload as { phase: string; method: string; url: string; status: number | null };
+    return `net ${p.phase} ${p.method} ${p.url}${p.status !== null ? ` [${p.status}]` : ""}`;
+  }
+  return null;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const parsed = parseArgv(argv);
   const { positionals, flags } = parsed;
   // Aliases normalize to primary names so flag mapping below can't be skipped
   // by calling a verb under its alias (snapshot/goto/screenshot).
-  const cmd = lookupAction(parsed.cmd)?.name ?? parsed.cmd;
+  let cmd = lookupAction(parsed.cmd)?.name ?? parsed.cmd;
+
+  // `fs wait --call <pattern>` is the network wait: WP2's `wait` owns the DOM /
+  // query conditions, and the request matcher lives in the network verb, so the
+  // flag routes there without either verb knowing about the other.
+  if (cmd === "wait" && flags.call !== undefined) cmd = "wait-call";
 
   if (cmd === "help" || flags.help) {
     console.log(buildHelp());
@@ -136,6 +222,10 @@ async function main() {
     }
     throw e;
   }
+
+  // watch holds the connection open and streams pushes, so it runs its own
+  // connect/read/unsubscribe loop rather than the one-shot request path below.
+  if (cmd === "watch") return await runWatch(cfg, parsed);
 
   // stop must not cold-boot a browser just to kill it
   const client = await connectDaemon(cfg, {}, { spawnIfDown: cmd !== "stop" });
@@ -406,6 +496,34 @@ async function main() {
         if (args.sub === "save") args.body = await readBody(flags);
         break;
       }
+      case "mock": {
+        if (positionals[0] === "list") { args.sub = "list"; break; }
+        args.pattern = positionals[0];
+        if (typeof flags.status === "number") args.status = flags.status;
+        if (typeof flags.delay === "number") args.delay = flags.delay;
+        if (typeof flags.times === "number") args.times = flags.times;
+        // --body <json> inline, or --body - to read a JSON body from stdin.
+        if (flags.body !== undefined) {
+          args.body = flags.body === "-" ? await Bun.stdin.text() : flags.body === true ? "" : String(flags.body);
+        }
+        break;
+      }
+      case "unmock":
+        if (flags.all) args.all = true;
+        else args.pattern = positionals[0] ?? (typeof flags.pattern === "string" ? flags.pattern : undefined);
+        break;
+      case "throttle":
+        args.preset = positionals[0];
+        break;
+      case "wait-call": {
+        // Reached via `fs wait --call <pattern>` (flag holds the pattern) or a
+        // direct `fs wait-call <pattern>` (positional holds it).
+        args.pattern = typeof flags.call === "string" ? flags.call : positionals.join(" ") || undefined;
+        if (flags.done) args.done = true;
+        if (typeof flags.timeout === "number") args.timeoutMs = flags.timeout;
+        if (typeof flags.since === "number") args.sinceMs = flags.since;
+        break;
+      }
       case "stop":
         break;
       default:
@@ -432,7 +550,7 @@ async function main() {
     let reqTimeout = typeof flags.timeout === "number" ? flags.timeout : undefined;
     const blocks =
       cmd === "sleep" ? (Number(args.ms) || 0) :
-      cmd === "wait" || (SETTLE_VERBS.has(cmd) && flags.settled)
+      cmd === "wait" || cmd === "wait-call" || (SETTLE_VERBS.has(cmd) && flags.settled)
         ? (typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS)
         : cmd === "expect"
           ? ((args.spec as { timeoutMs?: number } | undefined)?.timeoutMs ?? 3_000)
