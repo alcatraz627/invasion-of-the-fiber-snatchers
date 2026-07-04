@@ -119,6 +119,64 @@ async function main() {
         args.key = positionals[0];
         args.target = inferTarget(positionals[1], flags);
         break;
+      case "hover":
+        args.target = inferTarget(positionals.join(" ") || undefined, flags);
+        if (typeof flags.hold === "number") args.hold = flags.hold;
+        break;
+      case "dblclick":
+      case "rclick":
+        args.target = inferTarget(positionals.join(" ") || undefined, flags);
+        break;
+      case "drag": {
+        // Two targets, each from its own positional; flags aren't applied to
+        // target inference here (one --css can't disambiguate two elements). Use
+        // refs/CSS/intent per positional: `fs drag "#a" "#b"` or `fs drag e12 e15`.
+        if (positionals.length < 2) {
+          console.log('✗ E_BAD_ARGS: drag needs a source and a dest — `fs drag "<source>" "<dest>"`');
+          return 1;
+        }
+        args.target = inferTarget(positionals[0], {});
+        args.dest = inferTarget(positionals[1], {});
+        if (typeof flags.via === "string") args.via = flags.via;
+        break;
+      }
+      case "chord":
+        args.keys = positionals[0];
+        args.target = inferTarget(positionals[1], flags);
+        break;
+      case "type": {
+        // Mirrors fill: with a target flag, all positionals are the text; else the
+        // last positional is the text and everything before it is the target.
+        const hasTargetFlag = flags.ref !== undefined || flags.css !== undefined || flags.component !== undefined;
+        if (hasTargetFlag) {
+          args.text = positionals.join(" ");
+          args.target = inferTarget(undefined, flags);
+        } else {
+          if (positionals.length < 2) {
+            console.log('✗ E_BAD_ARGS: type needs a target and text — `fs type "<target>" "hello"` (or --css/--ref + text)');
+            return 1;
+          }
+          args.text = positionals[positionals.length - 1] ?? "";
+          args.target = inferTarget(positionals.slice(0, -1).join(" ") || undefined, flags);
+        }
+        if (typeof flags.delay === "number") args.delay = flags.delay;
+        break;
+      }
+      case "scroll": {
+        if (flags["into-view"] !== undefined) {
+          args.intoView = true;
+          const iv = typeof flags["into-view"] === "string" ? flags["into-view"] : positionals.join(" ");
+          args.target = inferTarget(iv || undefined, flags);
+        } else {
+          if (flags.to !== undefined) args.to = flags.to; // "top" | "bottom" | <y>
+          if (typeof flags.by === "number") args.by = flags.by;
+          // A positional (or --css) names the scroll container; absent → the window.
+          const containerRaw = positionals.join(" ") || undefined;
+          const t = inferTarget(containerRaw, flags);
+          if (t) args.target = t;
+        }
+        break;
+      }
       case "wait": {
         // One condition per call, resolved from flags; the bare positional is a
         // wait-until-visible target. --timeout is the WAIT budget here (see the
@@ -199,7 +257,7 @@ async function main() {
     // them. --settled adds the debounce-aware post-condition; --quiet/--settle-
     // timeout tune the default settle pass; --grace and (with --settled) --timeout
     // tune the post-condition wait.
-    const SETTLE_VERBS = new Set(["click", "fill", "press", "dispatch"]);
+    const SETTLE_VERBS = new Set(["click", "fill", "press", "dispatch", "hover", "dblclick", "rclick", "drag", "chord", "type", "scroll"]);
     if (SETTLE_VERBS.has(cmd)) {
       if (flags.settled) args.settled = true;
       if (typeof flags.grace === "number") args.graceMs = flags.grace;

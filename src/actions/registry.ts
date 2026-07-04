@@ -5,6 +5,7 @@ import type { ActionDef } from "../pipeline/contracts.ts";
 import { navActions } from "./nav.ts";
 import { pointerActions } from "./pointer.ts";
 import { keyboardActions } from "./keyboard.ts";
+import { scrollActions } from "./scroll.ts";
 import { formsActions } from "./forms.ts";
 import { waitActions } from "./wait.ts";
 import { observeActions } from "./observe.ts";
@@ -18,6 +19,7 @@ const all: ActionDef<never>[] = [
   ...navActions,
   ...pointerActions,
   ...keyboardActions,
+  ...scrollActions,
   ...formsActions,
   ...waitActions,
   ...observeActions,
