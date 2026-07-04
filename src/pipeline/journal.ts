@@ -19,12 +19,19 @@ export class Journal {
     this.stream = createWriteStream(this.path, { flags: "a" });
   }
 
+  /** The seq of the most recently appended entry — a macro/session dump cites
+   *  it as the journal ref for the step that just ran. */
+  get lastSeq(): number {
+    return this.seq;
+  }
+
   append(entry: Omit<JournalEntry, "ts" | "run" | "seq">): JournalEntry {
     const full: JournalEntry = {
       ts: new Date().toISOString(),
       run: this.runId,
       seq: ++this.seq,
       ...entry,
+      args: redactSecrets(entry.cmd, entry.args, entry.target),
     };
     this.stream.write(JSON.stringify(full) + "\n");
     return full;
@@ -34,6 +41,38 @@ export class Journal {
   close(): Promise<void> {
     return new Promise((resolve) => this.stream.end(() => resolve()));
   }
+}
+
+// A fill's value is a secret when the field it targets reads like one. Password
+// inputs can't be told apart by role (the runtime reports "textbox" for every
+// text input) and the journal entry carries no element type, so redaction keys
+// off the target descriptor — the resolved label or the CSS selector — rather
+// than the element's `type`. This catches the common cases (a password targeted
+// by intent/label or `input[type=password]`); it CANNOT catch a password field
+// reached by an opaque ref with a bland label, and it does NOT touch eval or
+// dispatch payloads, which can still carry secrets. Type-accurate redaction
+// would need the resolved element's type plumbed into the journal entry — a
+// change to the frozen pipeline contract, tracked as a follow-up.
+const SECRET_RE = /pass(word|code|phrase)?|secret|token|otp|cvv|\bpin\b|credential|api[-_ ]?key/i;
+
+function redactSecrets(cmd: string, args: unknown, target: JournalEntry["target"]): unknown {
+  if (cmd !== "fill" || !args || typeof args !== "object" || !("value" in args)) return args;
+  if (!looksSecret(args as { target?: unknown }, target)) return args;
+  return { ...(args as object), value: "[redacted]" };
+}
+
+function looksSecret(args: { target?: unknown }, target: JournalEntry["target"]): boolean {
+  const bits: string[] = [];
+  if (target?.text) bits.push(target.text);
+  const spec = args.target;
+  if (spec && typeof spec === "object") {
+    const s = spec as { selector?: string; text?: string };
+    if (s.selector) bits.push(s.selector);
+    if (s.text) bits.push(s.text);
+  }
+  const hay = bits.join(" ");
+  if (/\[type=["']?password["']?\]/i.test(hay)) return true;
+  return SECRET_RE.test(hay);
 }
 
 /** Read entries back (macro recording, `journal` command). Latest run default. */

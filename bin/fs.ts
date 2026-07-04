@@ -45,6 +45,61 @@ function verbLabel(v: { name: string; aliases?: string[] }): string {
   return v.aliases?.length ? `${v.name} (${v.aliases.join(", ")})` : v.name;
 }
 
+/** Collect every `--param k=v` (repeatable — the flat flag parser keeps only the
+ *  last, so we re-scan argv) into a name->value map. */
+function collectParams(argv: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    let kv: string | undefined;
+    if (a === "--param") {
+      const v = argv[i + 1];
+      if (v && !v.startsWith("--")) kv = v;
+    } else if (a?.startsWith("--param=")) {
+      kv = a.slice("--param=".length);
+    }
+    if (kv) {
+      const j = kv.indexOf("=");
+      if (j > 0) out[kv.slice(0, j)] = kv.slice(j + 1);
+    }
+  }
+  return out;
+}
+
+/** YAML/JS body for `macro save` / `probe save`: a --from-file wins, else stdin
+ *  (only when piped — a TTY would block). */
+async function readBody(flags: Record<string, string | number | boolean>): Promise<string> {
+  if (typeof flags["from-file"] === "string") return await Bun.file(flags["from-file"]).text();
+  if (!process.stdin.isTTY) return await Bun.stdin.text();
+  return "";
+}
+
+function coerceScalar(v: string | number | boolean): unknown {
+  if (typeof v !== "string") return v;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (v === "null") return null;
+  return v;
+}
+
+/** Build an `expect` spec from `expect <kind> …`. */
+function buildExpectSpec(positionals: string[], flags: Record<string, string | number | boolean>): Record<string, unknown> {
+  const kind = positionals[0];
+  const spec: Record<string, unknown> = {};
+  if (kind === "text") spec.text = positionals.slice(1).join(" ");
+  else if (kind === "count") spec.count = { select: positionals[1], equals: Number(positionals[2]) };
+  else if (kind === "settled") spec.settled = true;
+  else if (kind === "state") {
+    const expr = positionals.slice(1).join(" ") || (typeof flags.expr === "string" ? flags.expr : "");
+    const st: Record<string, unknown> = { expr };
+    if (flags.truthy) st.truthy = true;
+    else if (flags.equals !== undefined) st.equals = coerceScalar(flags.equals);
+    spec.state = st;
+  }
+  if (typeof flags.timeout === "number") spec.timeoutMs = flags.timeout;
+  return spec;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const parsed = parseArgv(argv);
@@ -319,6 +374,38 @@ async function main() {
         if (typeof flags.adapter === "string") args.adapter = flags.adapter;
         break;
       }
+      case "macro": {
+        args.sub = positionals[0];
+        if (positionals[1]) args.name = positionals[1];
+        if (typeof flags.name === "string") args.name = flags.name; // --name for from-journal
+        args.params = collectParams(argv);
+        if (typeof flags.last === "number") args.last = flags.last;
+        if (typeof flags.from === "number") args.from = flags.from;
+        if (typeof flags.to === "number") args.to = flags.to;
+        if (flags["continue-on-error"]) args.stopOnError = false;
+        if (args.sub === "save") args.body = await readBody(flags);
+        break;
+      }
+      case "session":
+        args.sub = positionals[0];
+        if (args.sub === "start") {
+          const goal = positionals.slice(1).join(" ");
+          if (goal) args.goal = goal;
+        }
+        if (typeof flags.name === "string") args.name = flags.name;
+        break;
+      case "expect":
+        args.spec = buildExpectSpec(positionals, flags);
+        break;
+      case "probe": {
+        args.sub = positionals[0];
+        if (positionals[1]) args.name = positionals[1];
+        if (typeof flags.desc === "string") args.desc = flags.desc;
+        if (typeof flags.tag === "string") args.tag = flags.tag;
+        if (flags.allow) args.allow = true;
+        if (args.sub === "save") args.body = await readBody(flags);
+        break;
+      }
       case "stop":
         break;
       default:
@@ -347,7 +434,11 @@ async function main() {
       cmd === "sleep" ? (Number(args.ms) || 0) :
       cmd === "wait" || (SETTLE_VERBS.has(cmd) && flags.settled)
         ? (typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS)
-        : undefined;
+        : cmd === "expect"
+          ? ((args.spec as { timeoutMs?: number } | undefined)?.timeoutMs ?? 3_000)
+          : cmd === "macro" && args.sub === "run"
+            ? 120_000 // a flow can run many settling steps
+            : undefined;
     if (blocks !== undefined) reqTimeout = Math.max(30_000, blocks + 5_000);
     // `look` shells out to the local vision model, which loads on first use;
     // the socket must outlast a cold model load, not the 30s default.
