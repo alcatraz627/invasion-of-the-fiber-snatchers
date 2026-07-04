@@ -19,6 +19,12 @@ export class Journal {
     this.stream = createWriteStream(this.path, { flags: "a" });
   }
 
+  /** The seq of the most recently appended entry — a macro/session dump cites
+   *  it as the journal ref for the step that just ran. */
+  get lastSeq(): number {
+    return this.seq;
+  }
+
   append(entry: Omit<JournalEntry, "ts" | "run" | "seq">): JournalEntry {
     const full: JournalEntry = {
       ts: new Date().toISOString(),
