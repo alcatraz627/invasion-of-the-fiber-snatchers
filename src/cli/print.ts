@@ -42,6 +42,12 @@ export function printResponse(res: Response, json = false): number {
     const parts = [`mutations:${d.mutations}`];
     if (d.url) parts.push(`url:${d.url.to}`);
     if (d.queries) parts.push(`queries:${d.queries}`);
+    // The T0 flagship fields belong on the text line, not only in --json
+    // (docs-run finding: CLAUDE.md's example was truer than the printer).
+    for (const s of d.surfaces?.opened ?? []) parts.push(`surfaces:+${s}`);
+    for (const s of d.surfaces?.closed ?? []) parts.push(`surfaces:-${s}`);
+    if (d.focus) parts.push(`focus:${d.focus}`);
+    for (const [k, [a, b]] of Object.entries(d.counts ?? {})) parts.push(`${k}:${a}→${b}`);
     if (d.errors?.length) parts.push(`errors:${d.errors.length}!`);
     console.log(`Δ ${parts.join("  ")}`);
     if (d.errors?.length) for (const e of d.errors) console.log(`  ! ${e}`);

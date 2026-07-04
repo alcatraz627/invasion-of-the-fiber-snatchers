@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Symlink fiber-snatcher into ~/.local/bin.
-# Requires bun at ~/.bun/bin/bun — installs it transparently if missing (via curl).
+# Install both CLIs into ~/.local/bin: `fs` (V2, primary) and `fiber-snatcher`
+# (V1, frozen). Requires bun at ~/.bun/bin/bun.
 
 set -euo pipefail
 
@@ -8,6 +8,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUN="$HOME/.bun/bin/bun"
 BIN_SRC="$REPO_ROOT/bin/fiber-snatcher.ts"
 BIN_DST="$HOME/.local/bin/fiber-snatcher"
+FS_SRC="$REPO_ROOT/bin/fs.ts"
+FS_DST="$HOME/.local/bin/fs"
 
 if [ ! -x "$BUN" ]; then
   echo "✖ bun not found at $BUN. Install: curl -fsSL https://bun.sh/install | bash"
@@ -23,7 +25,14 @@ exec "$BUN" run "$BIN_SRC" "\$@"
 EOF
 chmod +x "$BIN_DST"
 
-echo "✓ fiber-snatcher installed at $BIN_DST"
+cat > "$FS_DST" <<EOF
+#!/usr/bin/env bash
+exec "$BUN" run "$FS_SRC" "\$@"
+EOF
+chmod +x "$FS_DST"
+
+echo "✓ fs (V2) installed at $FS_DST"
+echo "✓ fiber-snatcher (V1) installed at $BIN_DST"
 
 # Install deps
 cd "$REPO_ROOT"
@@ -36,4 +45,4 @@ if ! echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then
 fi
 
 echo ""
-echo "Try:  fiber-snatcher help"
+echo "Try:  fs help"
