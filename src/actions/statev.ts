@@ -57,8 +57,8 @@ export const stateActions: ActionDef<never>[] = [
     name: "dispatch",
     summary: "Send a JSON action to a state adapter (--adapter queries|jotai; - = stdin)",
     target: "none",
-    observation: true,
-    settle: false,
+    // Mutating verb (invalidate/setData/atom-set change the app): full
+    // settle + digest so the effect is reported; reads just pay ~150ms.
     async run(ctx, args: DispatchArgs) {
       let action: unknown;
       try {
