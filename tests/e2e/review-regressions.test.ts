@@ -11,13 +11,9 @@ beforeAll(async () => {
   t = await startTarget();
   const res = await t.fs("info"); // cold-boot once for the file
   expect(res.ok).toBe(true);
-  // Let the app's initial query land so tests attribute mutations to their own
-  // actions, not to boot-time rendering (WP2's `wait settled` replaces this).
-  for (let i = 0; i < 20; i++) {
-    const rows = await t.fs("eval", "document.querySelector('#row-count')?.textContent ?? ''");
-    if (String(rows.data).startsWith("10000")) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  // WP2: wait for the boot query to settle so tests attribute mutations to their
+  // own actions, not to boot-time rendering (replaces the old poll loop).
+  await t.fs("wait", "--settled");
 }, 40_000);
 
 afterAll(async () => {

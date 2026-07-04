@@ -332,6 +332,11 @@ function armRemountSentinel(): void {
 
 function buildRuntime() {
   const adapters = new Map<string, Adapter>();
+  // Set when the tanstack adapter is discovered: reads live pending count plus a
+  // monotonic fetch-start counter (see makeTanstackAdapter). The counter lets a
+  // debounced query that fires AND resolves between two settle polls still be
+  // detected — an idle-only read would miss it (the debounce hole WP2 closes).
+  let tanstackActivity: (() => { pending: number; started: number }) | null = null;
   const observations: Observation[] = [];
   const MAX_OBS = 1000;
   let refSeq = 0;
@@ -421,7 +426,9 @@ function buildRuntime() {
       if (needQueries) {
         const c = (f.memoizedProps as { client?: { getQueryCache?: () => unknown } } | null)?.client;
         if (c && typeof c.getQueryCache === "function") {
-          adapters.set("queries", makeTanstackAdapter(c as never));
+          const t = makeTanstackAdapter(c as never);
+          adapters.set("queries", t.adapter);
+          tanstackActivity = t.activity;
           needQueries = false;
         }
       }
@@ -622,6 +629,15 @@ function buildRuntime() {
       }
     },
 
+    /** Live pending count plus a monotonic count of fetch-starts since injection.
+     *  `started` is the "did a query fire?" read the debounce-aware settle needs:
+     *  comparing it against a baseline catches a query that ran entirely inside a
+     *  poll gap, which `queriesPending` (a point-in-time read) cannot see. */
+    queriesActivity(): { pending: number; started: number } {
+      discoverAdapters();
+      return tanstackActivity ? tanstackActivity() : { pending: 0, started: 0 };
+    },
+
     /** Digest source. mutations/errors/route reset each call (deltas); surfaces/
      *  focus/counts are absolute current-state reads the pipeline diffs against a
      *  baseline drain; remounts are cumulative and non-destructive so one between
@@ -660,13 +676,54 @@ function buildRuntime() {
 }
 
 function makeTanstackAdapter(client: {
-  getQueryCache: () => { getAll: () => Array<{ queryKey: readonly unknown[]; state: { data: unknown; status: string; fetchStatus: string; error: unknown; dataUpdatedAt: number } }> };
+  getQueryCache: () => {
+    getAll: () => Array<{ queryKey: readonly unknown[]; state: { data: unknown; status: string; fetchStatus: string; error: unknown; dataUpdatedAt: number } }>;
+    subscribe?: (listener: () => void) => () => void;
+  };
   getQueryData: (k: readonly unknown[]) => unknown;
   setQueryData: (k: readonly unknown[], d: unknown) => unknown;
   invalidateQueries: (f: { queryKey: readonly unknown[] }) => Promise<void>;
   refetchQueries: (f: { queryKey: readonly unknown[] }) => Promise<unknown>;
   resetQueries: (f: { queryKey: readonly unknown[] }) => Promise<void>;
-}): Adapter {
+}): { adapter: Adapter; activity: () => { pending: number; started: number } } {
+  const cache = client.getQueryCache();
+
+  // Monotonic count of query fetch-starts. A subscription re-scans the cache on
+  // every change and increments `started` for each query newly in `fetching`,
+  // so a query that starts and finishes inside a settle poll gap is still
+  // counted. Point-in-time `pending` alone can't see that, which is exactly the
+  // debounce case: the query fires after the settle pass has already read idle.
+  let started = 0;
+  const fetching = new Set<string>();
+  const keyId = (q: { queryKey: readonly unknown[] }): string => {
+    try { return JSON.stringify(q.queryKey); } catch { return String(q.queryKey); }
+  };
+  const rescan = (): void => {
+    const now = new Set<string>();
+    for (const q of cache.getAll()) {
+      if (q.state.fetchStatus === "fetching") {
+        const id = keyId(q);
+        now.add(id);
+        if (!fetching.has(id)) started++;
+      }
+    }
+    fetching.clear();
+    for (const id of now) fetching.add(id);
+  };
+  try {
+    rescan();    // seed the fetching set with anything already in flight
+    started = 0; // ...but don't count pre-existing fetches as "started since baseline"
+    cache.subscribe?.(() => rescan());
+  } catch { /* a cache without subscribe: `pending` still works via live reads */ }
+
+  const activity = (): { pending: number; started: number } => {
+    let pending = 0;
+    try {
+      for (const q of cache.getAll()) if (q.state.fetchStatus === "fetching") pending++;
+    } catch { /* transient cache access */ }
+    return { pending, started };
+  };
+
   const snapshot = (filter?: string) =>
     client.getQueryCache().getAll()
       .filter((q) => !filter || JSON.stringify(q.queryKey).toLowerCase().includes(filter.toLowerCase()))
@@ -678,21 +735,24 @@ function makeTanstackAdapter(client: {
         error: q.state.error ? String((q.state.error as Error)?.message ?? q.state.error) : null,
       }));
   return {
-    getState: () => snapshot(),
-    dispatch(action: unknown) {
-      const a = action as { op?: string; key?: readonly unknown[]; data?: unknown; filter?: string };
-      const op = a?.op ?? "list";
-      if (op === "list") return snapshot(a.filter);
-      if (!a.key) throw new Error(`queries dispatch: key required for op=${op}`);
-      switch (op) {
-        case "get": return { key: a.key, data: client.getQueryData(a.key) };
-        case "invalidate": return client.invalidateQueries({ queryKey: a.key }).then(() => ({ ok: true, op }));
-        case "refetch": return client.refetchQueries({ queryKey: a.key }).then(() => ({ ok: true, op }));
-        case "reset": return client.resetQueries({ queryKey: a.key }).then(() => ({ ok: true, op }));
-        case "setData": return { ok: true, previous: client.getQueryData(a.key), next: client.setQueryData(a.key, a.data) };
-        default: throw new Error(`queries dispatch: unknown op ${op}`);
-      }
+    adapter: {
+      getState: () => snapshot(),
+      dispatch(action: unknown) {
+        const a = action as { op?: string; key?: readonly unknown[]; data?: unknown; filter?: string };
+        const op = a?.op ?? "list";
+        if (op === "list") return snapshot(a.filter);
+        if (!a.key) throw new Error(`queries dispatch: key required for op=${op}`);
+        switch (op) {
+          case "get": return { key: a.key, data: client.getQueryData(a.key) };
+          case "invalidate": return client.invalidateQueries({ queryKey: a.key }).then(() => ({ ok: true, op }));
+          case "refetch": return client.refetchQueries({ queryKey: a.key }).then(() => ({ ok: true, op }));
+          case "reset": return client.resetQueries({ queryKey: a.key }).then(() => ({ ok: true, op }));
+          case "setData": return { ok: true, previous: client.getQueryData(a.key), next: client.setQueryData(a.key, a.data) };
+          default: throw new Error(`queries dispatch: unknown op ${op}`);
+        }
+      },
     },
+    activity,
   };
 }
 

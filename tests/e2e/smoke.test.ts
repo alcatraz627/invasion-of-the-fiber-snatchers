@@ -43,11 +43,8 @@ async function fs(...argv: string[]): Promise<Envelope> {
 }
 
 async function waitForParts(): Promise<void> {
-  for (let i = 0; i < 20; i++) {
-    const r = await fs("eval", "document.querySelector('#row-count')?.textContent ?? ''");
-    if (String(r.data).includes("rows")) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  // WP2: wait for the parts query to settle instead of polling #row-count.
+  await fs("wait", "--settled");
 }
 
 /** Known baseline for an acceptance test: no modal open, Data tab active, parts
@@ -168,23 +165,16 @@ describe("WP0 acceptance", () => {
     expect(after.data).toBe((before.data as number) + 1);
   }, 15_000);
 
-  test("fill on the duplicate-search trap refuses; scoped fill works and query settles", async () => {
+  test("fill on the duplicate-search trap refuses; scoped fill --settled lands the query", async () => {
     const dup = await fs("fill", "Search", "Part 12");
     expect(dup.ok).toBe(false);
     expect(dup.error?.code).toBe("E_TARGET_AMBIGUOUS");
 
-    const res = await fs("fill", "--css", "section input", "Part 12");
+    // WP2: --settled closes the debounce hole, so no poll loop — the count is
+    // already filtered by the time the command returns.
+    const res = await fs("fill", "--css", "section input", "Part 12", "--settled");
     expect(res.ok).toBe(true);
-    // The debounce window outlives the settle pass, so the digest can honestly
-    // read "settled" before the query fires — WP2's `wait settled` is the real
-    // fix; until then, poll for the result.
-    let rows = "";
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 200));
-      const res2 = await fs("eval", "document.querySelector('#row-count').textContent");
-      rows = String(res2.data);
-      if (rows !== "10000 rows") break;
-    }
+    const rows = String((await fs("eval", "document.querySelector('#row-count').textContent")).data);
     expect(rows).toMatch(/^\d+ rows$/);
     expect(rows).not.toBe("10000 rows");
   }, 30_000);
