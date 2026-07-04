@@ -359,9 +359,11 @@ function NetParts() {
   const status = isError ? "error" : isFetching ? "fetching" : "idle";
   return (
     <div id="net-parts">
-      <input id="net-search" aria-label="api parts search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="API search" />
-      <button id="net-refetch" onClick={() => void refetch()}>Load parts</button>
-      <button id="net-deferred" onClick={() => setTimeout(() => { void fetch("/api/parts?deferred=1"); }, 600)}>Deferred load</button>
+      {/* Labels deliberately avoid "parts"/"search" so they don't collide with the
+          fixture's existing intent vocabulary; the e2e tests target these by #id. */}
+      <input id="net-search" aria-label="API endpoint" value={q} onChange={(e) => setQ(e.target.value)} placeholder="API endpoint" />
+      <button id="net-refetch" onClick={() => void refetch()}>Reload API</button>
+      <button id="net-deferred" onClick={() => setTimeout(() => { void fetch("/api/parts?deferred=1"); }, 600)}>Delayed API</button>
       <span id="net-count">{rows.length}</span>
       <span id="net-status">{status}</span>
     </div>
