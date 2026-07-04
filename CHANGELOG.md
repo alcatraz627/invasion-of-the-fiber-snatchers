@@ -1,5 +1,56 @@
 # Changelog
 
+## [2.0.0] — 2026-07-04
+
+### V2: the agent-first rebuild
+
+Ground-up rework around one action pipeline (resolve → wait → act → settle →
+digest → journal). Built from a 3-track research phase (architecture map,
+205-invocation usage mining, external agent-tooling research) and an 8-package
+fleet build, each package independently reviewed and merged. 158 tests
+(unit + protocol + e2e through the real CLI→daemon→browser path).
+
+**Breaking / superseding:**
+- New CLI `fs` (old `fiber-snatcher` CLI remains, frozen, for V1 projects).
+- Page runtime is CDP-injected at daemon boot — the bundle-copied
+  `.fiber-snatcher/runtime/expose.ts` integration is obsolete in V2 (a compat
+  shim still accepts `__snatcher__.register`).
+- V2 daemon uses `control-v2.sock` + `daemon-v2.pid`; detects a live V1 daemon
+  and refuses with a remedy instead of fighting for the browser profile.
+
+**Core:**
+- Refs: `fs page` mints `e<seq>.<docTag>` refs; stale refs fail explicitly.
+- Digests: every mutating verb reports mutations/surfaces/focus/counts/url/
+  queries — dead clicks are visible; unobservable settles say "unknown".
+- Targeting: intent text, fiber component expressions, CSS, refs — ambiguity
+  returns ranked candidates (role, label, component, confidence) in one trip.
+- Waits: auto-wait + settle in every verb; `wait --settled|--text|--gone|
+  --url|--network-idle|--call`; `--settled` post-condition closes the
+  debounce hole via a monotonic query-start counter. Zero sleeps anywhere.
+- Adapters: TanStack Query + jotai discovered from the fiber tree, zero
+  app-side code.
+
+**Verbs:** hover/dblclick/rclick/drag(dual-path)/scroll/type/chord ·
+select/upload/paste/resize · verified `dismiss` (alias `close`) ·
+queries/atoms/dispatch/count · mock/unmock/throttle/wait-call/watch ·
+doctor/routes/remount · shoot (ring-buffered) / look (local vision) / record.
+
+**Flows:** YAML macro library at `~/.claude/fiber-actions/<repo-key>/`,
+`macro from-journal`, parameterized replay (`by name|index|random|id`, `%var%`),
+sessions with expect assertions, probe store. Journal redacts password-field
+fills (documented limits).
+
+**Telemetry profiles:** explore | debug | verify | minimal — output shape,
+screencast ring, and fail-on-error behavior follow the profile.
+
+**Deliberately not done (decisions, not gaps):** wire cmd stays `close`
+internally (verb is `dismiss`, alias covers `fs close`); `chord` and `press`
+both exist; `press --verify` unbuilt (use `dismiss`). Push-plumbing
+follow-ups (per-subscriber push, watch GC on disconnect) and type-accurate
+journal redaction are logged in reports/WP6.md and WP4.md for a future
+contract-review round.
+
+
 ## [0.4.1] — 2026-05-28
 
 ### Quality-of-life: dev-server-restart recovery
