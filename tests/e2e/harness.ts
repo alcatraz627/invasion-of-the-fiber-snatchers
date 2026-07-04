@@ -12,7 +12,15 @@ export type Envelope = {
   ok: boolean;
   data?: any;
   error?: { code: string; message: string; candidates?: any[]; hint?: string };
-  digest?: { mutations: string; url?: { from: string; to: string }; queries?: string; errors?: string[] };
+  digest?: {
+    mutations: string;
+    url?: { from: string; to: string };
+    queries?: string;
+    errors?: string[];
+    surfaces?: { opened?: string[]; closed?: string[] };
+    focus?: string;
+    counts?: Record<string, [number, number]>;
+  };
   gen?: number;
 };
 

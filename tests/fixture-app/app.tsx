@@ -38,20 +38,27 @@ function SearchBox({ id, placeholder }: { id: string; placeholder: string }) {
 function PartsTable() {
   const [raw, setRaw] = useState("");
   const [debounced, setDebounced] = useState("");
+  const [failedOnly, setFailedOnly] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setDebounced(raw), 250);
     return () => clearTimeout(t);
   }, [raw]);
   const { data, isFetching } = useDelayedParts(debounced);
   const rows = data ?? [];
+  // #row-count stays the query-result total (existing settle tests poll it); the
+  // Failed-only toggle filters the RENDERED rows synchronously, giving the digest
+  // a deterministic collection-count delta with no async query in the way.
+  const shown = rows.slice(0, 50);
+  const visible = failedOnly ? shown.filter((r) => r.status === "failed") : shown;
   return (
     <section>
       <input placeholder="Search" value={raw} onChange={(e) => setRaw(e.target.value)} aria-label="parts search" />
       <div id="fetch-state">{isFetching ? "fetching" : "idle"}</div>
       <div id="row-count">{rows.length} rows</div>
+      <button id="failed-toggle" onClick={() => setFailedOnly((f) => !f)}>{failedOnly ? "Showing failed" : "Failed only"}</button>
       <table>
         <tbody>
-          {rows.slice(0, 50).map((r) => (
+          {visible.map((r) => (
             <tr key={r.id} data-status={r.status}>
               <td>
                 <button onClick={() => store.set(themeAtom, r.name)}>{r.name}</button>
@@ -86,9 +93,17 @@ function App() {
       <nav>
         {/* navbar search: the duplicate-input trap (page search lives below) */}
         <SearchBox id="nav-search" placeholder="Search" />
-        {/* icon-only button: the unlabeled-control trap */}
+        {/* icon-only button: the unlabeled-control trap (resolves to #id) */}
         <button id="icon-only" onClick={() => setClicks((c) => c + 1)}>
           <svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6" /></svg>
+        </button>
+        {/* icon-only, no id: label must fall back to data-testid */}
+        <button data-testid="refresh-action" onClick={() => setClicks((c) => c + 1)}>
+          <svg width="16" height="16" aria-hidden="true"><path d="M0 0h12v12H0z" /></svg>
+        </button>
+        {/* icon-only, no id/testid: label must fall back to the svg <title> */}
+        <button onClick={() => setClicks((c) => c + 1)}>
+          <svg width="16" height="16"><title>Notifications</title><circle cx="8" cy="8" r="6" /></svg>
         </button>
         <span id="click-count">{clicks}</span>
         <span id="theme">{String(theme)}</span>
