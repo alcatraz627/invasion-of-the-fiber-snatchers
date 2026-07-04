@@ -108,6 +108,23 @@ describe("WP7 doctor", () => {
     expect(byName["runtime-match"].status).toBe("skip");
     rmSync(broken, { recursive: true, force: true });
   }, 15_000);
+
+  test("daemon parked on a blank page: page probes skip, not fail", async () => {
+    await t.fs("navigate", "about:blank");
+    const res = await t.fs("doctor");
+    const byName = Object.fromEntries((res.data.probes as any[]).map((p) => [p.name, p]));
+    expect(byName["v2-daemon"].status).toBe("ok"); // daemon itself is reachable
+    expect(byName["page-url"].status).toBe("warn"); // ...but on a blank page
+    expect(byName["runtime-match"].status).toBe("skip");
+    expect(byName.adapters.status).toBe("skip");
+    // Restore the fixture page for the describes that follow.
+    await t.fs("navigate");
+    for (let i = 0; i < 20; i++) {
+      const r = await t.fs("eval", "document.querySelector('#row-count')?.textContent ?? ''");
+      if (String(r.data).includes("rows")) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }, 20_000);
 });
 
 describe("WP7 routes", () => {
