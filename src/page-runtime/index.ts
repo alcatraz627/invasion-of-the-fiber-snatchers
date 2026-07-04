@@ -23,10 +23,16 @@ type Observation =
   | { kind: "mutation"; weight: number; ts: number }
   | { kind: "route"; url: string; ts: number };
 
+/** Root-remount sentinel state, owned by this runtime and read by the `remount`
+ *  verb. Auto-armed at injection so between-action HMR remounts are counted even
+ *  when no command is running (see drain()'s remount fields). */
+type RemountState = { count: number; lastAt: number; firstChild: Element | null; container: Element };
+
 declare global {
   interface Window {
     __fs?: FsRuntime;
     __snatcher__?: { register?: (name: string, a: Adapter) => void }; // V1 compat shim target
+    __fsRemount?: RemountState;
   }
 }
 
@@ -113,15 +119,54 @@ function roleOf(el: Element): string {
   return tag;
 }
 
-function labelOf(el: Element): string {
+function svgTitleOf(el: Element): string | undefined {
+  const t = el.querySelector(":scope > svg > title, :scope svg title, :scope > title");
+  const s = t?.textContent?.replace(/\s+/g, " ").trim();
+  return s || undefined;
+}
+
+function labelledByText(el: Element): string | undefined {
+  const ids = (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean);
+  if (!ids.length) return undefined;
+  const parts = ids
+    .map((id) => document.getElementById(id)?.textContent?.replace(/\s+/g, " ").trim())
+    .filter((s): s is string => !!s);
+  return parts.length ? parts.join(" ") : undefined;
+}
+
+/** The label a control shows to an agent. Icon-only controls have no text, so a
+ *  fallback ladder keeps them addressable: aria-label → visible text →
+ *  data-testid → svg <title> → title/alt → aria-labelledby → placeholder/name →
+ *  #id → nearest component → tag. `weak` marks the last rungs (id/component/tag)
+ *  so a snapshot can attach the component name for a control that has no real
+ *  label — "never bare button". */
+function controlLabel(el: Element): { text: string; weak: boolean } {
   const he = el as HTMLElement;
+  const clip = (s: string) => s.slice(0, 80);
   const aria = el.getAttribute("aria-label");
-  if (aria) return aria.slice(0, 80);
+  if (aria?.trim()) return { text: clip(aria.trim()), weak: false };
   const text = he.innerText?.replace(/\s+/g, " ").trim();
-  if (text) return text.slice(0, 80);
-  const ph = el.getAttribute("placeholder") ?? el.getAttribute("name") ?? el.getAttribute("title");
-  if (ph) return `[${ph.slice(0, 60)}]`;
-  return el.id ? `#${el.id}` : el.tagName.toLowerCase();
+  if (text) return { text: clip(text), weak: false };
+  const testid = el.getAttribute("data-testid") ?? el.getAttribute("data-test-id") ?? el.getAttribute("data-test");
+  if (testid?.trim()) return { text: clip(testid.trim()), weak: false };
+  const svgTitle = svgTitleOf(el);
+  if (svgTitle) return { text: clip(svgTitle), weak: false };
+  const titleAttr = el.getAttribute("title");
+  if (titleAttr?.trim()) return { text: clip(titleAttr.trim()), weak: false };
+  const img = el.querySelector("img[alt]")?.getAttribute("alt");
+  if (img?.trim()) return { text: clip(img.trim()), weak: false };
+  const lb = labelledByText(el);
+  if (lb) return { text: clip(lb), weak: false };
+  const ph = el.getAttribute("placeholder") ?? el.getAttribute("name");
+  if (ph?.trim()) return { text: `[${clip(ph.trim())}]`, weak: false };
+  if (el.id) return { text: `#${el.id}`, weak: true };
+  const comp = nearestComponent(el);
+  if (comp) return { text: `<${comp}>`, weak: true };
+  return { text: el.tagName.toLowerCase(), weak: true };
+}
+
+function labelOf(el: Element): string {
+  return controlLabel(el).text;
 }
 
 function nearestComponent(el: Element): string | undefined {
@@ -153,12 +198,149 @@ function parseComponentExpr(expr: string): { name: string; prop?: string; op?: "
   return { name: m[1], prop: m[2], op: m[3] as "~=" | "=" | undefined, value: m[4] };
 }
 
+/** A table or sizable list the agent reasons about by size, not by enumerating
+ *  every row control. The page snapshot and the digest's `counts` key these the
+ *  same way (`table:PartsTable`), so a row-count change in a digest lines up with
+ *  the collection in the last snapshot. */
+type Collection = { el: Element; kind: string; label: string; rows: number };
+
+function collectionRows(el: Element): number {
+  const role = el.getAttribute("role");
+  if (el.tagName === "TABLE" || role === "grid" || role === "table") {
+    const roleRows = el.querySelectorAll("[role=row]").length;
+    if (roleRows) return roleRows;
+    const bodyRows = el.querySelectorAll("tbody tr").length;
+    return bodyRows || el.querySelectorAll("tr").length;
+  }
+  const items = el.querySelectorAll(":scope > li, :scope > [role=listitem], :scope > [role=option]").length;
+  return items || el.querySelectorAll("li, [role=listitem], [role=option]").length;
+}
+
+function collectionLabel(el: Element): string {
+  const aria = el.getAttribute("aria-label");
+  if (aria?.trim()) return aria.trim().slice(0, 60);
+  const cap = el.querySelector(":scope > caption, :scope > legend")?.textContent?.replace(/\s+/g, " ").trim();
+  if (cap) return cap.slice(0, 60);
+  const lb = labelledByText(el);
+  if (lb) return lb.slice(0, 60);
+  const comp = nearestComponent(el);
+  if (comp) return comp;
+  return el.id ? `#${el.id}` : (el.getAttribute("role") ?? el.tagName.toLowerCase());
+}
+
+function namedCollections(root: Element): Collection[] {
+  const out: Collection[] = [];
+  for (const t of Array.from(root.querySelectorAll("table, [role=grid], [role=table]"))) {
+    if (!isVisible(t)) continue;
+    const rows = collectionRows(t);
+    if (rows < 3) continue; // a 2-row "table" is layout, not a collection
+    out.push({ el: t, kind: "table", label: collectionLabel(t), rows });
+  }
+  for (const l of Array.from(root.querySelectorAll("ul, ol, [role=list]"))) {
+    if (!isVisible(l)) continue;
+    const rows = collectionRows(l);
+    if (rows < 8) continue; // small lists (navs, tab strips) aren't collections
+    out.push({ el: l, kind: "list", label: collectionLabel(l), rows });
+  }
+  return out;
+}
+
+function inCollection(el: Element, collectionEls: Set<Element>): boolean {
+  let p: Element | null = el;
+  while (p) {
+    if (collectionEls.has(p)) return true;
+    p = p.parentElement;
+  }
+  return false;
+}
+
+// Dialogs/popovers whose appearance/disappearance is a T0 digest signal.
+const SURFACE_SELECTOR = "[role=dialog],[role=alertdialog],[role=listbox],[role=menu]";
+
+function surfaceLabel(el: Element): string {
+  const aria = el.getAttribute("aria-label");
+  if (aria?.trim()) return aria.trim().slice(0, 60);
+  const lb = labelledByText(el);
+  if (lb) return lb.slice(0, 60);
+  const h = el.querySelector("h1,h2,h3,h4,h5,h6,[role=heading]")?.textContent?.replace(/\s+/g, " ").trim();
+  if (h) return h.slice(0, 60);
+  return el.id ? `#${el.id}` : (el.getAttribute("role") ?? el.tagName.toLowerCase());
+}
+
+/** Visible dialogs/popovers, keyed `role:label` — diffed across an action to
+ *  report what opened/closed. */
+function currentSurfaces(): string[] {
+  return Array.from(document.querySelectorAll(SURFACE_SELECTOR))
+    .filter(isVisible)
+    .map((el) => `${el.getAttribute("role")}:${surfaceLabel(el)}`);
+}
+
+/** The focused control's label, or null when focus rests on the body / an
+ *  unlabeled node — reported only when it names something an agent can act on. */
+function currentFocus(): string | null {
+  const a = document.activeElement;
+  if (!a || a === document.body || a === document.documentElement) return null;
+  const d = controlLabel(a);
+  return d.weak ? null : d.text;
+}
+
+function currentCounts(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const c of namedCollections(document.body)) out[`${c.kind}:${c.label}`] = c.rows;
+  return out;
+}
+
+function findReactContainer(): Element | null {
+  for (const el of [document.documentElement, ...Array.from(document.querySelectorAll("*"))]) {
+    for (const k in el) if (k.startsWith("__reactContainer$")) return el;
+  }
+  return document.getElementById("root") ?? document.getElementById("__next") ?? null;
+}
+
+let remountArmTries = 0;
+/** Watch the React container's first child identity: a full Fast Refresh / HMR
+ *  remount swaps it, ordinary re-renders don't. Retries until the container has
+ *  mounted (addInitScript runs before React does), then owns window.__fsRemount
+ *  so the `remount` verb reads this count instead of arming a second sentinel. */
+function armRemountSentinel(): void {
+  if (typeof window === "undefined" || window.__fsRemount) return;
+  const root = findReactContainer();
+  if ((!root || !root.firstElementChild) && remountArmTries++ < 50) {
+    setTimeout(armRemountSentinel, 100);
+    return;
+  }
+  const container = root ?? document.body;
+  if (!container) return;
+  const state: RemountState = { count: 0, lastAt: 0, firstChild: container.firstElementChild, container };
+  const obs = new MutationObserver(() => {
+    const fc = container.firstElementChild;
+    if (state.firstChild && fc && fc !== state.firstChild) {
+      state.count++;
+      state.lastAt = Date.now();
+      state.firstChild = fc;
+    } else if (fc) {
+      state.firstChild = fc;
+    }
+  });
+  try {
+    obs.observe(container, { childList: true });
+    window.__fsRemount = state;
+  } catch {
+    if (remountArmTries++ < 50) setTimeout(armRemountSentinel, 100);
+  }
+}
+
 function buildRuntime() {
   const adapters = new Map<string, Adapter>();
   const observations: Observation[] = [];
   const MAX_OBS = 1000;
   let refSeq = 0;
   let mutationWeight = 0;
+  // How many remounts have already been folded into a digest. Non-destructive
+  // in drain() so a remount between actions survives preDrain and reaches the
+  // next action's digest; markRemountsReported() acks after folding.
+  let remountReported = 0;
+  let discoveryTries = 0;
   // Every ref is stamped with this document's tag; a ref from a dead document
   // fails the tag check instead of silently matching a re-minted element.
   const docTag = Math.random().toString(36).slice(2, 6);
@@ -210,6 +392,7 @@ function buildRuntime() {
     }
   };
   startMo();
+  armRemountSentinel();
   const noteRoute = () => pushObs({ kind: "route", url: location.pathname + location.search, ts: Date.now() });
   const origPush = history.pushState.bind(history);
   history.pushState = (...args) => {
@@ -223,26 +406,33 @@ function buildRuntime() {
   };
   window.addEventListener("popstate", noteRoute);
 
-  // Adapter discovery — zero app cooperation (validated by the WP0 spike).
+  // Zero app cooperation (validated by the WP0 spike). One fiber walk finds both
+  // adapters; on apps that use neither, retries are capped so settle-loop polls
+  // stop re-walking the whole tree every 150ms (WP0-review #11). A reload builds
+  // a fresh runtime, resetting the cap.
+  const MAX_DISCOVERY_TRIES = 3;
   function discoverAdapters(): string[] {
-    if (!adapters.has("queries")) {
-      for (const f of walkAllFibers()) {
+    let needQueries = !adapters.has("queries");
+    let needJotai = !adapters.has("jotai");
+    if ((!needQueries && !needJotai) || discoveryTries >= MAX_DISCOVERY_TRIES) return [...adapters.keys()];
+    discoveryTries++;
+    for (const f of walkAllFibers()) {
+      if (needQueries) {
         const c = (f.memoizedProps as { client?: { getQueryCache?: () => unknown } } | null)?.client;
         if (c && typeof c.getQueryCache === "function") {
           adapters.set("queries", makeTanstackAdapter(c as never));
-          break;
+          needQueries = false;
         }
       }
-    }
-    if (!adapters.has("jotai")) {
-      for (const f of walkAllFibers()) {
+      if (needJotai) {
         const p = f.memoizedProps as { store?: unknown; value?: unknown } | null;
         const s = (p?.store ?? p?.value) as { get?: unknown; set?: unknown; sub?: unknown } | undefined;
         if (s && typeof s.get === "function" && typeof s.set === "function" && typeof s.sub === "function") {
           adapters.set("jotai", makeJotaiAdapter(s as never));
-          break;
+          needJotai = false;
         }
       }
+      if (!needQueries && !needJotai) break;
     }
     return [...adapters.keys()];
   }
@@ -255,39 +445,71 @@ function buildRuntime() {
       const scopeEl = opts?.scope ? document.querySelector(opts.scope) : document.body;
       if (!scopeEl) return { error: `scope matched nothing: ${opts?.scope}` };
       const detailed = opts?.budget === "detailed";
+      const collections = namedCollections(scopeEl);
+      const collectionEls = new Set(collections.map((c) => c.el));
       const els = Array.from(scopeEl.querySelectorAll(INTERACTABLE_SELECTOR)).filter(isVisible);
-      const cap = detailed ? 250 : 80;
-      const interactables = els.slice(0, cap).map((el) => {
-        const entry: Record<string, unknown> = { ref: mintRef(el), role: roleOf(el), text: labelOf(el) };
-        if (detailed) {
+      // Concise mode collapses controls inside a collection into its summary — a
+      // 10k-row table must not enumerate 10k refs. --scope <selector> paginates
+      // into one collection when the agent needs its individual controls.
+      const flat = detailed ? els : els.filter((el) => !inCollection(el, collectionEls));
+      const cap = detailed ? 250 : 60;
+      const interactables = flat.slice(0, cap).map((el) => {
+        const d = controlLabel(el);
+        const entry: Record<string, unknown> = { ref: mintRef(el), role: roleOf(el), text: d.text };
+        // A weak label (id/component/tag fallback) carries the component name so
+        // an icon-only control is still identifiable — "never bare button".
+        if (d.weak || detailed) {
           const comp = nearestComponent(el);
           if (comp) entry.component = comp;
         }
         return entry;
       });
+      const collectionOut = collections.map((c) => {
+        const entry: Record<string, unknown> = { kind: c.kind, label: c.label, ref: mintRef(c.el), rows: c.rows };
+        if (!detailed) {
+          const sample = Array.from(c.el.querySelectorAll(INTERACTABLE_SELECTOR))
+            .filter(isVisible)
+            .slice(0, 2)
+            .map((el) => ({ ref: mintRef(el), role: roleOf(el), text: controlLabel(el).text }));
+          if (sample.length) entry.sample = sample;
+        }
+        return entry;
+      });
+      const surfaces = currentSurfaces();
       return {
         url: location.pathname + location.search,
         title: document.title,
         interactables,
-        truncated: els.length > cap ? els.length : undefined,
+        collections: collectionOut.length ? collectionOut : undefined,
+        surfaces: surfaces.length ? surfaces : undefined,
+        truncated: flat.length > cap ? flat.length : undefined,
       };
     },
 
     resolveIntent(text: string, role?: string) {
-      const needle = text.toLowerCase();
-      const els = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR)).filter(isVisible);
+      // Normalize case + whitespace so "  Open   Preview " matches "Open Preview".
+      // Matching is substring/equality (never a regex), so a label with regex
+      // metacharacters ("Add (+)", "Next >") is matched literally.
+      const needle = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+      if (!needle) return [];
+      // Include hidden matches but penalize them, so the sole match being hidden
+      // surfaces as a low-confidence candidate ("it exists but you can't see it")
+      // rather than a bare E_TARGET_NOT_FOUND.
+      const els = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR));
       const scored = els
         .map((el) => {
-          const label = labelOf(el).toLowerCase();
+          const raw = controlLabel(el).text;
+          const label = raw.toLowerCase().replace(/\s+/g, " ").trim();
           const r = roleOf(el);
           let score = 0;
           if (label === needle) score = 1;
-          else if (label.includes(needle)) score = 0.7 + Math.min(0.2, needle.length / label.length / 5);
+          else if (label.includes(needle)) score = 0.7 + Math.min(0.2, needle.length / Math.max(label.length, 1) / 5);
           else return null;
-          if (role && r !== role) score -= 0.4;
-          return { el, score, role: r, text: labelOf(el) };
+          if (role && r !== role) score -= 0.4; // prefer role matches
+          if (!isVisible(el)) score -= 0.5; // penalize hidden-but-matching
+          return { el, score, role: r, text: raw };
         })
-        .filter((x): x is NonNullable<typeof x> => !!x && x.score > 0.3)
+        .filter((x): x is NonNullable<typeof x> => !!x && x.score > 0.15)
         .sort((a, b) => b.score - a.score)
         .slice(0, 8);
       return scored.map((s) => ({
@@ -295,7 +517,7 @@ function buildRuntime() {
         role: s.role,
         text: s.text,
         component: nearestComponent(s.el),
-        confidence: Number(s.score.toFixed(2)),
+        confidence: Number(Math.max(0, s.score).toFixed(2)),
       }));
     },
 
@@ -377,7 +599,10 @@ function buildRuntime() {
       if (!name) throw new Error("no adapters found (discovery found neither tanstack nor jotai) and none registered");
       const adapter = adapters.get(String(name));
       if (!adapter) throw new Error(`adapter not found: ${name}. available: ${[...adapters.keys()].join(", ")}`);
-      return safeSnapshot(await Promise.resolve(adapter.dispatch(action)));
+      // Adapter results are query/atom data, not fiber nodes, so keep `key`/`ref`
+      // (the TanStack query key names each entry). The React-internal-key strip
+      // is for fiber snapshots (state()), not adapter dispatch (WP7 handoff 1).
+      return safeSnapshot(await Promise.resolve(adapter.dispatch(action)), 0, { includeInternals: true });
     },
 
     register(name: string, adapter: Adapter) {
@@ -396,19 +621,34 @@ function buildRuntime() {
       }
     },
 
-    /** Digest source: drain observation counters since the last call. */
+    /** Digest source. mutations/errors/route reset each call (deltas); surfaces/
+     *  focus/counts are absolute current-state reads the pipeline diffs against a
+     *  baseline drain; remounts are cumulative and non-destructive so one between
+     *  actions still reaches the next digest. */
     drain() {
       const errors = observations.filter((o) => o.kind === "error" || (o.kind === "console" && o.level === "error"));
       const routes = observations.filter((o) => o.kind === "route") as Array<{ url: string }>;
+      const remounts = window.__fsRemount?.count ?? 0;
+      if (remounts < remountReported) remountReported = remounts; // `remount --reset` resync
       const out = {
         mutationWeight,
         errors: errors.slice(-5).map((e) => (e as { body: string }).body),
         route: routes.at(-1)?.url,
         queriesPending: api.queriesPending(),
+        surfaces: currentSurfaces(),
+        focus: currentFocus(),
+        counts: currentCounts(),
+        remounts,
+        remountsNew: remounts - remountReported,
       };
       mutationWeight = 0;
       observations.length = 0;
       return out;
+    },
+
+    /** Ack remounts already folded into a digest so they aren't re-reported. */
+    markRemountsReported() {
+      remountReported = window.__fsRemount?.count ?? remountReported;
     },
 
     count: (selector: string) => document.querySelectorAll(selector).length,
@@ -460,6 +700,13 @@ function makeJotaiAdapter(store: {
   set: (a: unknown, v: unknown) => unknown;
   dev4_get_mounted_atoms?: () => Iterable<{ debugLabel?: string; toString?: () => string }>;
 }): Adapter {
+  // Atom enumeration needs jotai's dev store API, absent on production bundles.
+  // Without it discovery still "succeeds" (get/set/sub exist), so the adapter
+  // must announce that atoms are unreadable rather than silently return []
+  // (WP0-review #16).
+  const hasDevApi = typeof store.dev4_get_mounted_atoms === "function";
+  const DEGRADED =
+    "jotai store detected but its dev enumeration API (dev4_get_mounted_atoms) is absent — likely a production build; atoms can't be listed or read by name. Rebuild with a development env to inspect atoms.";
   const enumerate = () => {
     const out: Array<{ name: string; atom: unknown; value?: unknown; error?: string }> = [];
     try {
@@ -475,11 +722,15 @@ function makeJotaiAdapter(store: {
     return out;
   };
   return {
-    getState: () => enumerate().map(({ name, value, error }) => (error ? { name, error } : { name, value })),
+    getState: () =>
+      hasDevApi
+        ? enumerate().map(({ name, value, error }) => (error ? { name, error } : { name, value }))
+        : [{ degraded: DEGRADED }],
     dispatch(action: unknown) {
       const a = action as { op?: string; atom?: string; value?: unknown };
       const op = a?.op ?? "list";
       if (op === "list") return this.getState();
+      if (!hasDevApi) throw new Error(DEGRADED);
       if (!a.atom) throw new Error("jotai dispatch: atom name required");
       const hit = enumerate().find((e) => e.name === a.atom);
       if (!hit) throw new Error(`atom not found: ${a.atom}. known: ${enumerate().map((e) => e.name).join(", ") || "(none)"}`);
