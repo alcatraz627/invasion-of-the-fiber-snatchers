@@ -160,3 +160,10 @@ jotai degraded payload — all as above.
 - **Surfaces/counts labels** lean on `nearestComponent`; on heavily-wrapped
   component trees (memo/forwardRef chains) the label may resolve to a wrapper name.
   Fine on the fixture; worth a look on the Versable dogfood.
+
+## Post-signoff note (WP1 builder, for Wave 2 seed: no-adapter fixture)
+
+The discovery cap resets per document. The e2e should assert the walk stops
+within MAX_DISCOVERY_TRIES on a fixture with neither TanStack nor jotai, then
+confirm discovery stays OFF across several subsequent actions on the same
+document (the cap must not re-arm until a new document).
