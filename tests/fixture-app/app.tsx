@@ -4,7 +4,7 @@
  *  duplicate search inputs, icon-only buttons, ambiguous row labels, debounced
  *  search, delayed TanStack query, modal, tabs, 10k-row table, jotai atom. */
 
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useRef, useState, type UIEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Provider as JotaiProvider, atom, createStore, useAtom } from "jotai";
@@ -83,11 +83,155 @@ function Modal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** WP3a hover trap: a card that opens on pointer-enter and must STAY open while
+ *  the pointer rests. The wrapper owns enter/leave and the card renders BELOW the
+ *  trigger (never over it), so resting on the button doesn't fire mouseleave —
+ *  that persistence is what `fs hover` asserts. */
+function HoverPopover() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div id="hover-zone" style={{ display: "inline-block" }} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button aria-label="Hover me">Hover me</button>
+      {open && (
+        <div role="dialog" aria-label="Hover Card" style={{ border: "1px solid gray", padding: 8 }}>
+          Hover card content
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** WP3a right-click trap: a zone that opens a role=menu on contextmenu (a T0
+ *  surface signal). preventDefault stops the native browser menu. */
+function ContextZone() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div id="ctx-zone" style={{ padding: 12, border: "1px dashed gray" }} onContextMenu={(e) => { e.preventDefault(); setOpen(true); }}>
+      Right-click here
+      {open && (
+        <div role="menu" aria-label="Context Menu" style={{ border: "1px solid black", padding: 8 }}>
+          <button role="menuitem" onClick={() => setOpen(false)}>Rename</button>
+          <button role="menuitem" onClick={() => setOpen(false)}>Delete</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** WP3a drag trap: a 4-item HTML5 drag-and-drop reorder list (kept under the
+ *  8-item collection threshold so it doesn't clutter the digest counts). #dnd-order
+ *  mirrors the live order for a cheap assertion. */
+function DndList() {
+  const [items, setItems] = useState(["Alpha", "Bravo", "Charlie", "Delta"]);
+  const dragIdx = useRef<number | null>(null);
+  const onDrop = (to: number) => {
+    const from = dragIdx.current;
+    dragIdx.current = null;
+    if (from === null || from === to) return;
+    setItems((prev) => {
+      const next = prev.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved!);
+      return next;
+    });
+  };
+  return (
+    <div>
+      <ul id="dnd-list" aria-label="Reorder list" style={{ listStyle: "none", padding: 0 }}>
+        {items.map((name, i) => (
+          <li
+            key={name}
+            id={`dnd-${name.toLowerCase()}`}
+            draggable
+            onDragStart={() => { dragIdx.current = i; }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => onDrop(i)}
+            style={{ padding: 4, border: "1px solid #ccc" }}
+          >
+            {name}
+          </li>
+        ))}
+      </ul>
+      <div id="dnd-order">{items.join(",")}</div>
+    </div>
+  );
+}
+
+/** WP3a drag trap (pointer-sensor style): reorders on raw mouse events
+ *  (mousedown to grab, mouseup to drop) rather than native HTML5 drag — the
+ *  handler shape dnd-kit's PointerSensor / react-dnd's mouse backend use, which
+ *  `drag --via mouse` drives. Item-named ids stay stable across reorders. */
+function PointerDndList() {
+  const [items, setItems] = useState(["One", "Two", "Three", "Four"]);
+  const dragIdx = useRef<number | null>(null);
+  const onDrop = (to: number) => {
+    const from = dragIdx.current;
+    dragIdx.current = null;
+    if (from === null || from === to) return;
+    setItems((prev) => {
+      const next = prev.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved!);
+      return next;
+    });
+  };
+  return (
+    <div>
+      <ul id="pdnd-list" aria-label="Pointer reorder list" style={{ listStyle: "none", padding: 0 }}>
+        {items.map((name, i) => (
+          <li
+            key={name}
+            id={`pdnd-${name.toLowerCase()}`}
+            onMouseDown={() => { dragIdx.current = i; }}
+            onMouseUp={() => onDrop(i)}
+            style={{ padding: 4, border: "1px solid #ccc" }}
+          >
+            {name}
+          </li>
+        ))}
+      </ul>
+      <div id="pdnd-order">{items.join(",")}</div>
+    </div>
+  );
+}
+
+/** WP3a scroll trap: a windowed list that materializes 20 more rows each time it
+ *  is scrolled to the bottom. The <ul aria-label="Windowed Rows"> is a named
+ *  collection, so the row-count growth shows up in the digest's `counts` delta —
+ *  the "rows materialized" signal a scroll verb must surface. */
+function WindowedList() {
+  const [count, setCount] = useState(20);
+  const onScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) setCount((c) => Math.min(c + 20, 200));
+  };
+  return (
+    <div id="scroll-box" onScroll={onScroll} style={{ height: 120, overflow: "auto", border: "1px solid #888" }}>
+      <ul aria-label="Windowed Rows" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {Array.from({ length: count }, (_, i) => (
+          <li key={i} style={{ height: 20 }}>Row {i}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function App() {
   const [tab, setTab] = useState("data");
   const [modalOpen, setModalOpen] = useState(false);
   const [clicks, setClicks] = useState(0);
   const [theme] = useAtom(themeAtom, { store });
+  // WP3a chord trap: Cmd/Ctrl+K opens a command palette (a T0 surface), Escape
+  // closes it — the canonical keyboard-combo behavior `fs chord` drives.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen(true); }
+      if (e.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   return (
     <main>
       <nav>
@@ -120,6 +264,18 @@ function App() {
       {tab === "history" && <div id="history-pane">History pane</div>}
       <button onClick={() => setModalOpen(true)}>Open Preview</button>
       {modalOpen && <Modal onClose={() => setModalOpen(false)} />}
+      {paletteOpen && (
+        <div role="dialog" id="cmd-palette" aria-label="Command Palette" style={{ border: "2px solid navy", padding: 12 }}>
+          <input placeholder="Run a command" aria-label="palette input" />
+          <button onClick={() => setPaletteOpen(false)}>Close palette</button>
+        </div>
+      )}
+      {/* WP3a pointer/keyboard/scroll traps (always mounted, so always discoverable) */}
+      <HoverPopover />
+      <ContextZone />
+      <DndList />
+      <PointerDndList />
+      <WindowedList />
     </main>
   );
 }
