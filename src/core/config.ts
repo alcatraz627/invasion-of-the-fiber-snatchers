@@ -16,6 +16,7 @@ export type FsConfig = {
   logsDir: string;
   daemonPidFile: string;
   headless?: boolean;         // test harnesses set this; interactive use stays headful
+  actionsRoot?: string;       // macro/probe store override (tests, non-standard homes)
   cdpPortHint: number;        // port we ask Playwright to expose CDP on (best-effort)
   // Rolling screencast (T3). All optional; omitted fields use the defaults in
   // screencast.ts. The ring buffer lets `shoot` answer from memory instantly and

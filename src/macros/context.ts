@@ -17,12 +17,9 @@ export type MacroContext = {
 
 export async function macroContext(): Promise<MacroContext> {
   const cfg = await requireConfig();
-  // `actionsRoot` is an optional escape hatch (tests, non-standard home); it is
-  // not part of the typed FsConfig, hence the narrow read here.
-  const actionsRoot = (cfg as { actionsRoot?: string }).actionsRoot;
   const base = join(cfg.logsDir, "..");
   return {
-    store: openStore(actionsRoot),
+    store: openStore(cfg.actionsRoot),
     runsDir: join(base, "runs"),
     macroRunsDir: join(base, "macro-runs"),
   };
