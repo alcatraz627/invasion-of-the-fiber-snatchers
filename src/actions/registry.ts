@@ -6,6 +6,7 @@ import { navActions } from "./nav.ts";
 import { pointerActions } from "./pointer.ts";
 import { keyboardActions } from "./keyboard.ts";
 import { formsActions } from "./forms.ts";
+import { miscActions } from "./misc.ts";
 import { waitActions } from "./wait.ts";
 import { observeActions } from "./observe.ts";
 import { evalActions } from "./evalx.ts";
@@ -19,6 +20,7 @@ const all: ActionDef<never>[] = [
   ...pointerActions,
   ...keyboardActions,
   ...formsActions,
+  ...miscActions,
   ...waitActions,
   ...observeActions,
   ...evalActions,

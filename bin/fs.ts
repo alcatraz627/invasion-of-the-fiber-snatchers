@@ -119,6 +119,66 @@ async function main() {
         args.key = positionals[0];
         args.target = inferTarget(positionals[1], flags);
         break;
+      // WP3b verbs. select/paste mirror fill's "last positional is the value,
+      // the rest is the target" split; a target flag (--css/--ref/--component)
+      // makes every positional the value.
+      case "select": {
+        const explicit = typeof flags.option === "string" ? flags.option : undefined;
+        const hasTargetFlag = flags.ref !== undefined || flags.css !== undefined || flags.component !== undefined;
+        const minPositionals = hasTargetFlag ? 1 : 2;
+        if (explicit === undefined && positionals.length < minPositionals) {
+          console.log('✗ E_BAD_ARGS: select needs an option — `fs select <target> "<option>"` (or --option)');
+          return 1;
+        }
+        args.option = explicit ?? positionals[positionals.length - 1] ?? "";
+        const targetRaw = explicit !== undefined ? positionals.join(" ") : positionals.slice(0, -1).join(" ");
+        args.target = inferTarget(targetRaw || undefined, flags);
+        if (typeof flags.by === "string") args.by = flags.by;
+        break;
+      }
+      case "paste": {
+        const explicit = typeof flags.value === "string" ? flags.value : undefined;
+        const hasTargetFlag = flags.ref !== undefined || flags.css !== undefined || flags.component !== undefined;
+        const minPositionals = hasTargetFlag ? 1 : 2;
+        if (explicit === undefined && positionals.length < minPositionals) {
+          console.log('✗ E_BAD_ARGS: paste needs text — `fs paste <target> "<text>"` (or --value)');
+          return 1;
+        }
+        args.text = explicit ?? positionals[positionals.length - 1] ?? "";
+        const targetRaw = explicit !== undefined ? positionals.join(" ") : positionals.slice(0, -1).join(" ");
+        args.target = inferTarget(targetRaw || undefined, flags);
+        break;
+      }
+      case "upload": {
+        // Files are the trailing positionals; the target is the first positional
+        // OR a target flag (recommended for multi-word intent targets, which a
+        // bare positional split can't distinguish from a path).
+        const hasTargetFlag = flags.ref !== undefined || flags.css !== undefined || flags.component !== undefined;
+        const files = hasTargetFlag ? positionals.slice() : positionals.slice(1);
+        if (typeof flags.file === "string") files.push(flags.file);
+        if (files.length === 0) {
+          console.log("✗ E_BAD_ARGS: upload needs a file path — `fs upload --css <sel> <file...>` or `fs upload <target> <file...>`");
+          return 1;
+        }
+        args.files = files;
+        args.target = inferTarget(hasTargetFlag ? undefined : positionals[0], flags);
+        break;
+      }
+      case "resize": {
+        const w = positionals[0] ?? (typeof flags.width === "number" ? String(flags.width) : undefined);
+        const h = positionals[1] ?? (typeof flags.height === "number" ? String(flags.height) : undefined);
+        if (w === undefined || h === undefined) {
+          console.log("✗ E_BAD_ARGS: resize needs width and height — `fs resize <width> <height>`");
+          return 1;
+        }
+        args.width = Number(w);
+        args.height = Number(h);
+        break;
+      }
+      case "close":
+        // Optional close control; bare `fs close` presses Escape on the top surface.
+        args.target = inferTarget(positionals.join(" ") || undefined, flags);
+        break;
       case "wait": {
         // One condition per call, resolved from flags; the bare positional is a
         // wait-until-visible target. --timeout is the WAIT budget here (see the
