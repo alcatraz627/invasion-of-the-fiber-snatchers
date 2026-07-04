@@ -154,6 +154,19 @@ async function main() {
       case "shoot":
         if (typeof flags.selector === "string") args.selector = flags.selector;
         if (typeof flags.path === "string") args.path = flags.path;
+        // --at -3s / --at -3 / --at 3 all mean "the frame ~3 seconds ago".
+        if (flags.at !== undefined) {
+          const raw = typeof flags.at === "number" ? flags.at : parseFloat(String(flags.at));
+          if (!Number.isNaN(raw)) args.at = Math.abs(raw);
+        }
+        break;
+      case "look":
+        if (typeof flags.selector === "string") args.selector = flags.selector;
+        // The question can be a flag or a bare positional: `look "is it open?"`.
+        args.prompt = typeof flags.prompt === "string" ? flags.prompt : positionals.length ? positionals.join(" ") : undefined;
+        break;
+      case "record":
+        args.action = positionals[0];
         break;
       case "eval": {
         const code = positionals.join(" ");
@@ -217,6 +230,9 @@ async function main() {
         ? (typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS)
         : undefined;
     if (blocks !== undefined) reqTimeout = Math.max(30_000, blocks + 5_000);
+    // `look` shells out to the local vision model, which loads on first use;
+    // the socket must outlast a cold model load, not the 30s default.
+    if (cmd === "look") reqTimeout = Math.max(reqTimeout ?? 0, 120_000);
 
     const wireCmd = cmd === "stop" ? "close" : cmd;
     const res = await client.request(wireCmd, args, reqTimeout);

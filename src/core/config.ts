@@ -17,6 +17,16 @@ export type FsConfig = {
   daemonPidFile: string;
   headless?: boolean;         // test harnesses set this; interactive use stays headful
   cdpPortHint: number;        // port we ask Playwright to expose CDP on (best-effort)
+  // Rolling screencast (T3). All optional; omitted fields use the defaults in
+  // screencast.ts. The ring buffer lets `shoot` answer from memory instantly and
+  // `shoot --at -3s` recover a recent frame. Off unless `profile debug` (or an
+  // active `record`) turns it on; `profile minimal` force-stops it.
+  screencast?: {
+    fps?: number;         // frames sampled per second (default 4)
+    ringSeconds?: number; // how far back the ring reaches (default 60)
+    maxBytes?: number;    // hard memory cap for the ring (default 25 MiB)
+    quality?: number;     // JPEG quality 1-100 (default 50)
+  };
   sources: {
     nextDevCommand: string;   // e.g. "npm run dev"
     pm: "npm" | "pnpm" | "bun" | "yarn";
