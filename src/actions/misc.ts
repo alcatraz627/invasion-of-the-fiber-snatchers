@@ -49,8 +49,12 @@ export const miscActions: ActionDef[] = [
     },
   },
   {
-    name: "close",
-    aliases: ["dismiss"],
+    // Named `dismiss`, not `close`: the daemon reserves the `close` wire command
+    // for its own shutdown (stop maps to it), so a verb literally named `close`
+    // would be swallowed by the shutdown path. `close` is kept as an alias — the
+    // CLI normalizes it to `dismiss` before the wire dispatch, so `fs close` works.
+    name: "dismiss",
+    aliases: ["close"],
     summary: "Dismiss the top surface (Escape, or click a close control) and verify it left",
     target: "optional",
     async run(ctx, args, target) {

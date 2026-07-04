@@ -131,9 +131,11 @@ function PasteBox() {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onPaste={(e) => {
+          // Own the insertion so the pasted text lands exactly once (the browser's
+          // default paste would otherwise also insert it into this controlled input).
+          e.preventDefault();
           setPasteCount((c) => c + 1);
-          const t = e.clipboardData.getData("text/plain");
-          if (t) setValue(t);
+          setValue(e.clipboardData.getData("text/plain"));
         }}
       />
       <span id="paste-count">{pasteCount}</span>
@@ -241,13 +243,15 @@ function App() {
       {tab === "history" && <div id="history-pane">History pane</div>}
       <button onClick={() => setModalOpen(true)}>Open Preview</button>
       {modalOpen && <Modal onClose={() => setModalOpen(false)} />}
-      {/* WP3b traps: forms, responsive layout, and the two dismiss modals. */}
-      <section aria-label="forms">
+      {/* WP3b traps: forms, responsive layout, and the two dismiss modals. A
+          plain <div>, not a <section>: existing tests target the parts search via
+          the `section input` selector, which must stay unambiguous. */}
+      <div>
         <SelectBox />
         <UploadBox />
         <PasteBox />
         <ResponsivePanel />
-      </section>
+      </div>
       <button onClick={() => setEscapeOpen(true)}>Open Escape Modal</button>
       <button onClick={() => setStuckOpen(true)}>Open Stuck Modal</button>
       {escapeOpen && <EscapeModal onClose={() => setEscapeOpen(false)} />}

@@ -175,8 +175,9 @@ async function main() {
         args.height = Number(h);
         break;
       }
-      case "close":
-        // Optional close control; bare `fs close` presses Escape on the top surface.
+      case "dismiss":
+        // `fs close` normalizes to `dismiss` (see misc.ts). Optional close control;
+        // bare `fs dismiss` presses Escape on the top surface.
         args.target = inferTarget(positionals.join(" ") || undefined, flags);
         break;
       case "wait": {
