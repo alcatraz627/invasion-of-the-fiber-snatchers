@@ -149,6 +149,9 @@ describe("WP7 state verbs", () => {
     expect(all.ok).toBe(true);
     expect(Array.isArray(all.data)).toBe(true);
     expect(all.data.length).toBeGreaterThan(0);
+    expect(all.data[0].key).toBeDefined(); // WP1: adapter results keep the query key
+
+
 
     const parts = await t.fs("queries", "parts");
     expect(parts.ok).toBe(true);

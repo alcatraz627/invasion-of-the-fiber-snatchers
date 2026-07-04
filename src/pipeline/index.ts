@@ -12,6 +12,13 @@ type DrainResult = {
   errors: string[];
   route?: string;
   queriesPending: number;
+  /** Absolute current-state reads the digest diffs against a baseline drain. */
+  surfaces: string[];
+  focus: string | null;
+  counts: Record<string, number>;
+  /** Cumulative remount count and how many are not yet folded into a digest. */
+  remounts: number;
+  remountsNew: number;
 };
 
 export type PipelineDeps = {
@@ -136,6 +143,21 @@ export function makeCtx(deps: PipelineDeps): PipelineCtx {
     const runnerUp = candidates[1];
     const confident = top.confidence >= 0.85 && (!runnerUp || top.confidence - runnerUp.confidence >= 0.15);
     if (!confident) {
+      // One weak match is a mismatch, not ambiguity — name why it fell short (a
+      // role filter, a partial text match) instead of "1 plausible matches".
+      if (candidates.length === 1) {
+        const wantRole = spec.kind === "intent" ? spec.role : undefined;
+        const why =
+          wantRole && top.role !== wantRole
+            ? `the closest match is a ${top.role}, not a ${wantRole}`
+            : `the only match is low-confidence (${Math.round(top.confidence * 100)}%)`;
+        throw new FsErrorShaped({
+          code: "E_TARGET_NOT_FOUND",
+          message: `no confident target for ${spec.kind === "intent" ? `"${spec.text}"` : spec.expr}: ${why}`,
+          candidates,
+          hint: `if "${top.text}" is the one you meant, target it directly: --ref ${top.ref}`,
+        });
+      }
       throw new FsErrorShaped({
         code: "E_TARGET_AMBIGUOUS",
         message: `ambiguous target (${candidates.length} plausible matches)`,
@@ -188,15 +210,18 @@ export async function runAction<A>(deps: PipelineDeps, def: ActionDef<A>, args: 
   const ctx = makeCtx(deps);
   const urlBefore = deps.page.url();
 
-  // Clear the observation buffer so the digest reflects THIS action only.
+  // Clear the observation buffer so the digest reflects THIS action only. The
+  // pre-action drain is also the baseline the settle diff compares surfaces/
+  // focus/counts against (it is non-destructive for those absolute reads).
   const preDrain = () => ctx.runtime<DrainResult>("drain").catch(() => null);
 
   let target: ResolvedTarget | undefined;
   let data: unknown;
   let error: FsError | undefined;
+  let baseline: DrainResult | null = null;
 
   try {
-    if (!def.observation) await preDrain();
+    if (!def.observation) baseline = await preDrain();
 
     if (def.target && args.target) {
       target = await ctx.resolve(args.target);
@@ -211,10 +236,14 @@ export async function runAction<A>(deps: PipelineDeps, def: ActionDef<A>, args: 
     error = e instanceof FsErrorShaped ? e.err : mapUnshapedError(e as Error);
   }
 
-  // Settle + digest for mutating verbs; observations skip it (cheap reads).
+  // Settle + digest for mutating verbs; observations skip it (cheap reads) —
+  // except under `profile debug`, where a read still emits a single-drain digest
+  // so the agent can see what was on screen at read time (WP0-review #21).
   let digest: DigestDelta | undefined;
   if (!def.observation && def.settle !== false) {
-    digest = await settleAndDigest(ctx, deps, urlBefore, def.settle || {});
+    digest = await settleAndDigest(ctx, deps, urlBefore, def.settle || {}, baseline);
+  } else if (def.observation && ctx.profile === "debug") {
+    digest = await observationDigest(ctx);
   }
 
   const durMs = Date.now() - start;
@@ -266,7 +295,8 @@ async function settleAndDigest(
   ctx: PipelineCtx,
   deps: PipelineDeps,
   urlBefore: string,
-  settle: { quietMs?: number; timeoutMs?: number; queries?: boolean }
+  settle: { quietMs?: number; timeoutMs?: number; queries?: boolean },
+  baseline: DrainResult | null
 ): Promise<DigestDelta> {
   const quietMs = settle.quietMs ?? 150;
   const timeoutMs = settle.timeoutMs ?? 3000;
@@ -275,13 +305,13 @@ async function settleAndDigest(
   let totalMutations = 0;
   const errors: string[] = [];
   let queriesPending = 0;
-  let drained = false;
+  let lastDrain: DrainResult | null = null;
 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, quietMs));
     const d = await ctx.runtime<DrainResult>("drain").catch(() => null);
     if (!d) break; // navigation killed the document mid-settle; do not fabricate below
-    drained = true;
+    lastDrain = d;
     totalMutations += d.mutationWeight;
     errors.push(...d.errors);
     queriesPending = d.queriesPending;
@@ -293,14 +323,61 @@ async function settleAndDigest(
   const urlChanged = urlAfter !== urlBefore;
   // A digest with no successful drain is a guess, and must say so: "major" when
   // the url proves a navigation happened, "unknown" otherwise — never "none".
-  const digest: DigestDelta = drained
+  const digest: DigestDelta = lastDrain
     ? {
         mutations: totalMutations === 0 ? "none" : totalMutations < 20 ? "minor" : "major",
         queries: queriesPending > 0 ? "pending" : "settled",
       }
     : { mutations: urlChanged ? "major" : "unknown" };
   if (urlChanged) digest.url = { from: urlBefore, to: urlAfter };
+
+  // A remount that landed before this action (survives preDrain) shows up as
+  // remountsNew on the final drain; fold it in and ack so it isn't re-reported.
+  if (lastDrain && lastDrain.remountsNew > 0) {
+    errors.push(`hot-reload remount detected (#${lastDrain.remounts})`);
+    await ctx.runtime("markRemountsReported").catch(() => null);
+  }
   if (errors.length) digest.errors = [...new Set(errors)].slice(0, 5);
+
+  // Surface/focus/count deltas: diff the settled state against the baseline.
+  if (baseline && lastDrain) {
+    const opened = lastDrain.surfaces.filter((s) => !baseline.surfaces.includes(s));
+    const closed = baseline.surfaces.filter((s) => !lastDrain!.surfaces.includes(s));
+    if (opened.length || closed.length) {
+      digest.surfaces = {};
+      if (opened.length) digest.surfaces.opened = opened;
+      if (closed.length) digest.surfaces.closed = closed;
+    }
+    if (lastDrain.focus && lastDrain.focus !== baseline.focus) digest.focus = lastDrain.focus;
+    const counts = countDeltas(baseline.counts, lastDrain.counts);
+    if (Object.keys(counts).length) digest.counts = counts;
+  }
+  return digest;
+}
+
+/** Collection size changes between two drains: appeared (0→n), vanished (n→0),
+ *  and resized (a→b). Keys are shared with the page snapshot's collections. */
+function countDeltas(before: Record<string, number>, after: Record<string, number>): Record<string, [number, number]> {
+  const out: Record<string, [number, number]> = {};
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    const a = before[key] ?? 0;
+    const b = after[key] ?? 0;
+    if (a !== b) out[key] = [a, b];
+  }
+  return out;
+}
+
+/** #21: observation verbs emit no digest normally; under `profile debug` a single
+ *  drain reports what was on screen at read time (mutations may reflect activity
+ *  since the last mutating verb — a debug convenience, not a per-action delta). */
+async function observationDigest(ctx: PipelineCtx): Promise<DigestDelta | undefined> {
+  const d = await ctx.runtime<DrainResult>("drain").catch(() => null);
+  if (!d) return undefined;
+  const digest: DigestDelta = {
+    mutations: d.mutationWeight === 0 ? "none" : d.mutationWeight < 20 ? "minor" : "major",
+    queries: d.queriesPending > 0 ? "pending" : "settled",
+  };
+  if (d.errors.length) digest.errors = [...new Set(d.errors)].slice(0, 5);
   return digest;
 }
 
