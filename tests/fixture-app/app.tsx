@@ -337,6 +337,37 @@ function StuckModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** WP6 network trap: a widget backed by a REAL fetch to /api/parts (the rest of
+ *  the fixture fakes async with a timer). This is what the network verbs act on —
+ *  `mock` swaps its response to drive the UI against fixed data, `throttle` slows
+ *  it, `wait --call` confirms the request fired, `watch network` streams it, and
+ *  under `profile verify` a mocked 500 fails the action that triggered it. The
+ *  Deferred button fires a fetch on a timer so `wait --call` can catch an
+ *  upcoming request (not just one that already fired). */
+function NetParts() {
+  const [q, setQ] = useState("");
+  const { data, isFetching, isError, refetch } = useQuery({
+    queryKey: ["api-parts", q],
+    queryFn: async () => {
+      const r = await fetch(`/api/parts?q=${encodeURIComponent(q)}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return (await r.json()) as Array<{ id: number; name: string; status: string }>;
+    },
+    retry: false, // a mocked 500 should surface at once, not after 3 silent retries
+  });
+  const rows = data ?? [];
+  const status = isError ? "error" : isFetching ? "fetching" : "idle";
+  return (
+    <div id="net-parts">
+      <input id="net-search" aria-label="api parts search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="API search" />
+      <button id="net-refetch" onClick={() => void refetch()}>Load parts</button>
+      <button id="net-deferred" onClick={() => setTimeout(() => { void fetch("/api/parts?deferred=1"); }, 600)}>Deferred load</button>
+      <span id="net-count">{rows.length}</span>
+      <span id="net-status">{status}</span>
+    </div>
+  );
+}
+
 function App() {
   const [tab, setTab] = useState("data");
   const [modalOpen, setModalOpen] = useState(false);
@@ -412,6 +443,7 @@ function App() {
       <DndList />
       <PointerDndList />
       <WindowedList />
+      <NetParts />
     </main>
   );
 }

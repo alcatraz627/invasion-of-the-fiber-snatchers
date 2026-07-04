@@ -18,6 +18,7 @@ import { remountActions } from "./remount.ts";
 import { macroActions } from "./macros.ts";
 import { sessionActions } from "./sessions.ts";
 import { probeActions } from "./probes.ts";
+import { networkActions } from "./network.ts";
 
 const all: ActionDef<never>[] = [
   ...navActions,
@@ -36,6 +37,7 @@ const all: ActionDef<never>[] = [
   ...macroActions,
   ...sessionActions,
   ...probeActions,
+  ...networkActions,
 ] as ActionDef<never>[];
 
 const byName = new Map<string, ActionDef<never>>();
