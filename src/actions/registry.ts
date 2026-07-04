@@ -8,6 +8,10 @@ import { keyboardActions } from "./keyboard.ts";
 import { formsActions } from "./forms.ts";
 import { observeActions } from "./observe.ts";
 import { evalActions } from "./evalx.ts";
+import { stateActions } from "./statev.ts";
+import { doctorActions } from "./doctor.ts";
+import { routeActions } from "./routes.ts";
+import { remountActions } from "./remount.ts";
 
 const all: ActionDef<never>[] = [
   ...navActions,
@@ -16,6 +20,10 @@ const all: ActionDef<never>[] = [
   ...formsActions,
   ...observeActions,
   ...evalActions,
+  ...stateActions,
+  ...doctorActions,
+  ...routeActions,
+  ...remountActions,
 ] as ActionDef<never>[];
 
 const byName = new Map<string, ActionDef<never>>();
