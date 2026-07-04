@@ -116,6 +116,15 @@ describe("WP6 network + watches", () => {
     expect(out).toMatch(/net (request|response)/);
   }, 30_000);
 
+  test("watch route streams a navigation as it happens", async () => {
+    const watchProm = t.fsRaw("watch", "route", "--for", "3000");
+    await sleep(900);
+    await t.fs("navigate", t.url); // a fresh navigation fires framenavigated
+    const out = await watchProm;
+    expect(out).toMatch(/route/);
+    expect(out).toContain(t.url);
+  }, 30_000);
+
   test("watch console streams a console error live", async () => {
     const watchProm = t.fsRaw("watch", "console", "--for", "3000");
     await sleep(900);
