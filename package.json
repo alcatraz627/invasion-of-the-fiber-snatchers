@@ -16,7 +16,8 @@
     "install-link": "bash scripts/install.sh"
   },
   "dependencies": {
-    "playwright": "1.55.1"
+    "playwright": "1.55.1",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@tanstack/react-query": "^5.101.2",
