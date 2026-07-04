@@ -4,8 +4,9 @@
 
 import type { Page } from "playwright";
 import type { DigestDelta, FsError, TargetCandidate } from "../protocol/types.ts";
-import { FsErrorShaped, type ActionDef, type PipelineCtx, type ResolvedTarget, type TargetSpec, type TelemetryProfile } from "./contracts.ts";
+import { FsErrorShaped, type ActionDef, type PipelineCtx, type ResolvedTarget, type SettlePolicy, type TargetSpec, type TelemetryProfile } from "./contracts.ts";
 import type { Journal } from "./journal.ts";
+import { pageStatePayload, waitQueriesIdle, waitSettled } from "./waits.ts";
 
 type DrainResult = {
   mutationWeight: number;
@@ -215,6 +216,17 @@ export async function runAction<A>(deps: PipelineDeps, def: ActionDef<A>, args: 
   // focus/counts against (it is non-destructive for those absolute reads).
   const preDrain = () => ctx.runtime<DrainResult>("drain").catch(() => null);
 
+  // Optional post-condition + settle overrides ride in on the wire args; they
+  // apply to any verb without each ActionDef having to declare them.
+  const opts = args as {
+    settled?: boolean;
+    graceMs?: number;
+    timeoutMs?: number;
+    settleQuietMs?: number;
+    settleTimeoutMs?: number;
+  };
+  const mutating = !def.observation && def.settle !== false;
+
   let target: ResolvedTarget | undefined;
   let data: unknown;
   let error: FsError | undefined;
@@ -223,27 +235,46 @@ export async function runAction<A>(deps: PipelineDeps, def: ActionDef<A>, args: 
   try {
     if (!def.observation) baseline = await preDrain();
 
-    if (def.target && args.target) {
+    if (def.target && def.target !== "none" && args.target) {
       target = await ctx.resolve(args.target);
     } else if (def.target === "required" && !args.target) {
       throw new FsErrorShaped({ code: "E_BAD_ARGS", message: `${def.name} requires a target` });
     }
 
-    if (def.wait?.settled) await waitSettled(ctx, def.wait.timeoutMs ?? 5000);
+    if (def.wait?.settled) await waitQueriesIdle(ctx, def.wait.timeoutMs ?? 5000);
 
     data = await def.run(ctx, args, target);
+
+    // `--settled` post-condition (mutating verbs only): hold until the app's
+    // queries have truly gone quiet, closing the debounce hole where the settle
+    // pass below could otherwise read "settled" before a debounced query fires.
+    if (opts.settled && mutating) {
+      await waitSettled(ctx, { timeoutMs: opts.timeoutMs, graceMs: opts.graceMs });
+    }
   } catch (e) {
     error = e instanceof FsErrorShaped ? e.err : mapUnshapedError(e as Error);
   }
 
   // Settle + digest for mutating verbs; observations skip it (cheap reads) —
   // except under `profile debug`, where a read still emits a single-drain digest
-  // so the agent can see what was on screen at read time (WP0-review #21).
+  // so the agent can see what was on screen at read time (WP0-review #21). The
+  // verb's declared SettlePolicy is the default; --quiet/--settle-timeout tune it
+  // per call without a contract change (both fields are already in SettlePolicy).
   let digest: DigestDelta | undefined;
-  if (!def.observation && def.settle !== false) {
-    digest = await settleAndDigest(ctx, deps, urlBefore, def.settle || {}, baseline);
+  if (mutating) {
+    const settle = mergeSettle(def.settle || {}, opts);
+    digest = await settleAndDigest(ctx, deps, urlBefore, settle, baseline);
   } else if (def.observation && ctx.profile === "debug") {
     digest = await observationDigest(ctx);
+  }
+
+  // A wait that timed out reports what WAS on screen (a concise snapshot + a
+  // state digest) so the agent re-plans instead of retrying blind. Only when the
+  // verb produced no digest of its own — mutating verbs already carry one.
+  if (error?.code === "E_WAIT_TIMEOUT" && digest === undefined) {
+    const payload = await pageStatePayload(ctx).catch(() => ({} as { data?: unknown; digest?: DigestDelta }));
+    if (payload.digest) digest = payload.digest;
+    if (data === undefined && payload.data !== undefined) data = payload.data;
   }
 
   const durMs = Date.now() - start;
@@ -277,18 +308,14 @@ function mapUnshapedError(e: Error): FsError {
   return { code: "E_INTERNAL", message: firstLine };
 }
 
-async function waitSettled(ctx: PipelineCtx, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const pending = await ctx.runtime<number>("queriesPending").catch(() => 0);
-    if (pending === 0) return;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new FsErrorShaped({
-    code: "E_WAIT_TIMEOUT",
-    message: `queries still fetching after ${timeoutMs}ms`,
-    hint: "the app may be polling; `fs page` shows what is on screen right now",
-  });
+/** Overlay per-call settle tunables onto the verb's declared SettlePolicy, so an
+ *  agent can widen the quiet window / timeout for a slow verb without the tool
+ *  hardcoding a budget (`--quiet`, `--settle-timeout`). */
+function mergeSettle(base: SettlePolicy, opts: { settleQuietMs?: number; settleTimeoutMs?: number }): SettlePolicy {
+  const out: SettlePolicy = { ...base };
+  if (typeof opts.settleQuietMs === "number") out.quietMs = opts.settleQuietMs;
+  if (typeof opts.settleTimeoutMs === "number") out.timeoutMs = opts.settleTimeoutMs;
+  return out;
 }
 
 async function settleAndDigest(

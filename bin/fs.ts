@@ -8,6 +8,7 @@ import { parseArgv, inferTarget } from "../src/cli/parse.ts";
 import { printResponse } from "../src/cli/print.ts";
 import { lookupAction, listActions } from "../src/actions/registry.ts";
 import { runDoctorCli, renderDoctor } from "../src/actions/doctor.ts";
+import { DEFAULT_WAIT_TIMEOUT_MS } from "../src/pipeline/waits.ts";
 
 /** Help is generated from the registry so the commands list can't drift from
  *  the verb table (WP0 shipped it hand-written and already out of sync). The
@@ -118,6 +119,29 @@ async function main() {
         args.key = positionals[0];
         args.target = inferTarget(positionals[1], flags);
         break;
+      case "wait": {
+        // One condition per call, resolved from flags; the bare positional is a
+        // wait-until-visible target. --timeout is the WAIT budget here (see the
+        // request-timeout margin below), not a socket timeout.
+        if (flags.settled) args.mode = "settled";
+        else if (flags["network-idle"]) args.mode = "network-idle";
+        else if (typeof flags.text === "string") { args.mode = "text"; args.text = flags.text; }
+        else if (typeof flags.url === "string") { args.mode = "url"; args.url = flags.url; }
+        else if (flags.gone !== undefined) {
+          args.mode = "gone";
+          const goneRaw = typeof flags.gone === "string" ? flags.gone : positionals.join(" ");
+          args.target = inferTarget(goneRaw || undefined, flags);
+        } else {
+          args.mode = "target";
+          args.target = inferTarget(positionals.join(" ") || undefined, flags);
+        }
+        if (typeof flags.timeout === "number") args.timeoutMs = flags.timeout;
+        if (typeof flags.grace === "number") args.graceMs = flags.grace;
+        break;
+      }
+      case "sleep":
+        args.ms = typeof positionals[0] === "string" ? Number(positionals[0]) : (typeof flags.ms === "number" ? flags.ms : 0);
+        break;
       case "page":
         args.budget = flags.detailed ? "detailed" : "concise";
         if (typeof flags.scope === "string") args.scope = flags.scope;
@@ -171,8 +195,31 @@ async function main() {
         if (positionals.length) args.target = inferTarget(positionals.join(" "), flags);
     }
 
+    // Settle controls apply to mutating verbs uniformly, so no ActionDef repeats
+    // them. --settled adds the debounce-aware post-condition; --quiet/--settle-
+    // timeout tune the default settle pass; --grace and (with --settled) --timeout
+    // tune the post-condition wait.
+    const SETTLE_VERBS = new Set(["click", "fill", "press", "dispatch"]);
+    if (SETTLE_VERBS.has(cmd)) {
+      if (flags.settled) args.settled = true;
+      if (typeof flags.grace === "number") args.graceMs = flags.grace;
+      if (flags.settled && typeof flags.timeout === "number") args.timeoutMs = flags.timeout;
+    }
+    if (typeof flags.quiet === "number") args.settleQuietMs = flags.quiet;
+    if (typeof flags["settle-timeout"] === "number") args.settleTimeoutMs = flags["settle-timeout"];
+
+    // wait/sleep, and a mutating verb with --settled, can block for their whole
+    // budget; the socket request must outlast that or it kills the verb mid-wait.
+    let reqTimeout = typeof flags.timeout === "number" ? flags.timeout : undefined;
+    const blocks =
+      cmd === "sleep" ? (Number(args.ms) || 0) :
+      cmd === "wait" || (SETTLE_VERBS.has(cmd) && flags.settled)
+        ? (typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS)
+        : undefined;
+    if (blocks !== undefined) reqTimeout = Math.max(30_000, blocks + 5_000);
+
     const wireCmd = cmd === "stop" ? "close" : cmd;
-    const res = await client.request(wireCmd, args, typeof flags.timeout === "number" ? flags.timeout : undefined);
+    const res = await client.request(wireCmd, args, reqTimeout);
     return printResponse(res, !!flags.json);
   } finally {
     client.close();
