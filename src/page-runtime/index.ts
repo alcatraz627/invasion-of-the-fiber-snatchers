@@ -408,9 +408,10 @@ function buildRuntime() {
 
   // Zero app cooperation (validated by the WP0 spike). One fiber walk finds both
   // adapters; on apps that use neither, retries are capped so settle-loop polls
-  // stop re-walking the whole tree every 150ms (WP0-review #11). A reload builds
-  // a fresh runtime, resetting the cap.
-  const MAX_DISCOVERY_TRIES = 3;
+  // stop re-walking the whole tree every 150ms (WP0-review #11). The cap is high
+  // enough that a slow-hydrating app still gets found (adapters mount at the
+  // root during hydration, not per-route); a reload resets it via a fresh runtime.
+  const MAX_DISCOVERY_TRIES = 8;
   function discoverAdapters(): string[] {
     let needQueries = !adapters.has("queries");
     let needJotai = !adapters.has("jotai");
