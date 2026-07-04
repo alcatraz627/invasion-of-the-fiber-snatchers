@@ -10,7 +10,7 @@ type StateArgs = { selector?: string; full?: boolean; shallow?: boolean };
 type LookArgs = { selector?: string; prompt?: string; shotsDir: string };
 type RecordArgs = { action?: string; shotsDir: string };
 
-export const observeActions: (ActionDef<ShootArgs> | ActionDef<PageArgs> | ActionDef<StateArgs> | ActionDef<LookArgs> | ActionDef<RecordArgs>)[] = [
+export const observeActions: (ActionDef<ShootArgs> | ActionDef<PageArgs> | ActionDef<StateArgs> | ActionDef<LookArgs> | ActionDef<RecordArgs> | ActionDef<Record<string, never>>)[] = [
   {
     name: "page",
     aliases: ["snapshot"],
@@ -133,6 +133,16 @@ export const observeActions: (ActionDef<ShootArgs> | ActionDef<PageArgs> | Actio
       return await ctx.runtime("state", args.selector, { full: args.full, shallow: args.shallow });
     },
   } as ActionDef<StateArgs>,
+  {
+    name: "why",
+    summary: "Every identity signal for a control (label, what it opens, handler, source) — for unlabeled icons",
+    target: "required",
+    observation: true,
+    settle: false,
+    async run(ctx, _args, target) {
+      return await ctx.runtime("why", target!.ref);
+    },
+  } as ActionDef<Record<string, never>>,
 ];
 
 async function ensureDir(filePath: string): Promise<void> {

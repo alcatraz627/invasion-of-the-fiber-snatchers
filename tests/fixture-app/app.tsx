@@ -4,7 +4,7 @@
  *  duplicate search inputs, icon-only buttons, ambiguous row labels, debounced
  *  search, delayed TanStack query, modal, tabs, 10k-row table, jotai atom. */
 
-import { StrictMode, useEffect, useRef, useState, type UIEvent } from "react";
+import { StrictMode, useEffect, useRef, useState, type ReactNode, type UIEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Provider as JotaiProvider, atom, createStore, useAtom } from "jotai";
@@ -370,6 +370,79 @@ function NetParts() {
   );
 }
 
+// WP9 traps (label-hostile toolbar): reproduce the two patterns the Versable
+// dogfood exposed, so the un-rendered-element-prop signal reader has a
+// controlled repro. (1) A dropdown whose menu is passed as a CHILDREN prop and
+// rendered only while open (floating-ui style) — its item labels must be
+// recoverable from the closed trigger's ancestor fiber, never mounted. (2) An
+// always-mounted tooltip whose text is a `content` prop, not in the DOM.
+
+type MenuItem = { label: ReactNode; tooltip: string };
+
+// Label is a ReactNode (a component with a string `title` prop), NOT a string —
+// exactly Versable's ExportOptionLabel shape.
+function MenuItemLabel({ title }: { title: string }) {
+  return <span className="menu-item-label">{title}</span>;
+}
+
+// The menu content. Rendered ONLY when the parent chooses to (open), but the
+// element itself — with `items` on its props — is constructed unconditionally
+// and handed to FakeDropdown as `children`.
+function FakeMenu({ items }: { items: MenuItem[] }) {
+  return (
+    <ul role="menu">
+      {items.map((it, i) => (
+        <li role="menuitem" key={i}>{it.label}</li>
+      ))}
+    </ul>
+  );
+}
+
+// floating-ui-style: children (the menu) render only while open. The trigger is
+// an icon-only button with no accessible name.
+function FakeDropdown({ triggerId, children }: { triggerId: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="fs-dropdown">
+      <button id={triggerId} onClick={() => setOpen((o) => !o)}>
+        <svg width="16" height="16" aria-hidden="true"><rect width="12" height="2" y="7" /></svg>
+      </button>
+      {open && children}
+    </span>
+  );
+}
+
+// Always-mounted tooltip: the label lives in a `content` prop and is hidden via
+// CSS, never text in the DOM until (in a real app) hover. The tool must read the
+// content prop off the wrapper fiber.
+function FakeTooltip({ content, children }: { content: string; children: ReactNode }) {
+  return (
+    <span className="fs-tooltip-wrap">
+      {children}
+      <span role="tooltip" style={{ display: "none" }}>{content}</span>
+    </span>
+  );
+}
+
+function LabelHostileToolbar() {
+  const exportItems: MenuItem[] = [
+    { label: <MenuItemLabel title="Export All Sheets" />, tooltip: "Download the whole file" },
+    { label: <MenuItemLabel title="Export Current Sheet" />, tooltip: "Download this sheet" },
+  ];
+  return (
+    <div id="wp9-toolbar">
+      <FakeDropdown triggerId="export-trigger">
+        <FakeMenu items={exportItems} />
+      </FakeDropdown>
+      <FakeTooltip content="Refresh data">
+        <button id="refresh-icon" onClick={() => void 0}>
+          <svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6" /></svg>
+        </button>
+      </FakeTooltip>
+    </div>
+  );
+}
+
 function App() {
   const [tab, setTab] = useState("data");
   const [modalOpen, setModalOpen] = useState(false);
@@ -446,6 +519,7 @@ function App() {
       <PointerDndList />
       <WindowedList />
       <NetParts />
+      <LabelHostileToolbar />
     </main>
   );
 }

@@ -255,6 +255,10 @@ async function main() {
         args.target = inferTarget(positionals.join(" ") || undefined, flags);
         break;
       }
+      case "why": {
+        args.target = inferTarget(positionals.join(" ") || undefined, flags);
+        break;
+      }
       case "fill": {
         // Last positional is the value; everything before it is the target.
         // An absent value must error, not silently clear the field.

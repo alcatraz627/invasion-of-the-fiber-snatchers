@@ -182,6 +182,127 @@ function nearestComponent(el: Element): string | undefined {
   return undefined;
 }
 
+type ReactElementish = { $$typeof?: symbol; type?: unknown; props?: Record<string, unknown> };
+function isReactElement(v: unknown): v is ReactElementish {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as ReactElementish).$$typeof === "symbol" &&
+    "type" in (v as object) &&
+    "props" in (v as object)
+  );
+}
+
+// Props that carry the content a control opens (a menu's items, a tooltip's body)
+// or a human label, read straight off an ancestor fiber. `children` is read only
+// from overlay wrappers (below) because elsewhere it is just the rendered subtree.
+const CONTENT_PROP_KEYS = ["tooltip", "content", "dropdown", "menu", "items", "options", "groups"];
+const LABEL_STRING_KEYS = ["title", "label", "aria-label", "text", "alt", "placeholder"];
+const OVERLAY_COMPONENT = /dropdown|menu|tooltip|popover|popper|float|overlay|select/i;
+
+/** Pull human-readable strings out of an un-rendered React element / items array /
+ *  config object. Bounded (shared node budget + depth cap + ≤8 strings) so a deep
+ *  prop tree can't stall a snapshot. This is how a closed dropdown's item labels
+ *  are recovered: React builds the menu element at the parent's render and hands
+ *  it to the mounted trigger as a prop VALUE, whether or not it is ever mounted. */
+function extractText(v: unknown, out: string[], depth: number, budget: { nodes: number }): void {
+  if (budget.nodes <= 0 || depth < 0 || out.length >= 8) return;
+  budget.nodes--;
+  if (v == null) return;
+  if (typeof v === "string") {
+    const s = v.replace(/\s+/g, " ").trim();
+    if (s && s.length <= 60 && !out.includes(s)) out.push(s);
+    return;
+  }
+  if (typeof v === "number") {
+    const s = String(v);
+    if (!out.includes(s)) out.push(s);
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const x of v) extractText(x, out, depth - 1, budget);
+    return;
+  }
+  if (isReactElement(v)) {
+    const props = v.props ?? {};
+    for (const k of ["children", "items", "options", "groups", "label", "title", "content"]) {
+      if (k in props) extractText((props as Record<string, unknown>)[k], out, depth - 1, budget);
+    }
+    for (const k of LABEL_STRING_KEYS) {
+      const pv = (props as Record<string, unknown>)[k];
+      if (typeof pv === "string") extractText(pv, out, depth, budget);
+    }
+    return;
+  }
+  if (typeof v === "object") {
+    // A menu item config like { label, tooltip, group } — read its text-ish keys.
+    for (const k of [...LABEL_STRING_KEYS, "tooltip"]) {
+      const pv = (v as Record<string, unknown>)[k];
+      if (typeof pv === "string") extractText(pv, out, depth, budget);
+      else if (isReactElement(pv) || Array.isArray(pv)) extractText(pv, out, depth - 1, budget);
+    }
+    for (const k of ["items", "options", "children"]) {
+      const pv = (v as Record<string, unknown>)[k];
+      if (Array.isArray(pv) || isReactElement(pv)) extractText(pv, out, depth - 1, budget);
+    }
+  }
+}
+
+/** Text a control opens or is described by, recovered from its ancestor fibers'
+ *  props without any interaction — closed-menu item labels, an un-DOM'd tooltip.
+ *  Only called for weak-labelled controls; bounded up-walk + node budget. */
+function unrenderedSignals(el: Element): string[] {
+  const out: string[] = [];
+  const budget = { nodes: 400 };
+  let f = fiberOf(el);
+  let hops = 0;
+  while (f && hops++ < 10 && out.length < 8 && budget.nodes > 0) {
+    const props = f.memoizedProps;
+    if (props && typeof props === "object") {
+      for (const k of CONTENT_PROP_KEYS) {
+        if (k in props) extractText((props as Record<string, unknown>)[k], out, 6, budget);
+      }
+      // `children` is the rendered subtree everywhere except overlay wrappers,
+      // where it is the un-mounted popover content — read it only there.
+      if (OVERLAY_COMPONENT.test(displayName(f.type)) && "children" in props) {
+        extractText((props as Record<string, unknown>).children, out, 6, budget);
+      }
+      for (const k of LABEL_STRING_KEYS) {
+        const pv = (props as Record<string, unknown>)[k];
+        if (typeof pv === "string") extractText(pv, out, 6, budget);
+      }
+    }
+    f = f.return ?? null;
+  }
+  return out;
+}
+
+/** The onClick/handler source and authoring site of a control (dev builds only) —
+ *  the "what does this do" evidence when even props don't name it. Both are absent
+ *  in production React, so this returns undefined there. */
+function controlProvenance(el: Element): { handler?: string; source?: string } {
+  const f = fiberOf(el);
+  const out: { handler?: string; source?: string } = {};
+  let g: typeof f = f;
+  let hops = 0;
+  while (g && hops++ < 6) {
+    const props = (g.memoizedProps ?? {}) as Record<string, unknown>;
+    const onClick = props.onClick ?? props.onSelect ?? props.onChange;
+    if (typeof onClick === "function" && !out.handler) {
+      const src = String(onClick).replace(/\s+/g, " ").trim();
+      if (src && src.length < 200) out.handler = src;
+    }
+    const dbg = (g as { _debugSource?: { fileName?: string; lineNumber?: number } })._debugSource;
+    if (dbg?.fileName && !out.source) {
+      const file = dbg.fileName.split("/").slice(-2).join("/");
+      out.source = `${file}:${dbg.lineNumber ?? "?"}`;
+    }
+    if (out.handler && out.source) break;
+    g = g.return ?? null;
+  }
+  return out;
+}
+
 function isVisible(el: Element): boolean {
   const he = el as HTMLElement;
   const cs = getComputedStyle(he);
@@ -470,6 +591,13 @@ function buildRuntime() {
           const comp = nearestComponent(el);
           if (comp) entry.component = comp;
         }
+        // Weak DOM label → recover text from ancestor fiber props (closed-menu
+        // item labels, un-DOM'd tooltips) so an unlabeled icon control is still
+        // addressable by what it opens/says.
+        if (d.weak) {
+          const sig = unrenderedSignals(el);
+          if (sig.length) entry.signals = sig.slice(0, 6);
+        }
         return entry;
       });
       const collectionOut = collections.map((c) => {
@@ -504,18 +632,31 @@ function buildRuntime() {
       // surfaces as a low-confidence candidate ("it exists but you can't see it")
       // rather than a bare E_TARGET_NOT_FOUND.
       const els = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR));
+      // Signal extraction (ancestor fiber props) is bounded per resolve so a
+      // label-hostile page with many weak controls can't blow the budget.
+      let signalBudget = 60;
       const scored = els
         .map((el) => {
-          const raw = controlLabel(el).text;
-          const label = raw.toLowerCase().replace(/\s+/g, " ").trim();
+          const d = controlLabel(el);
+          const label = d.text.toLowerCase().replace(/\s+/g, " ").trim();
           const r = roleOf(el);
           let score = 0;
+          let via = "";
           if (label === needle) score = 1;
           else if (label.includes(needle)) score = 0.7 + Math.min(0.2, needle.length / Math.max(label.length, 1) / 5);
-          else return null;
+          // No DOM-label match on a weak control: try the text it opens/says.
+          // A signal hit resolves lower than a direct label — "this control opens
+          // something called X" is weaker evidence than "this control is X".
+          else if (d.weak && signalBudget > 0) {
+            signalBudget--;
+            const sig = unrenderedSignals(el).map((s) => s.toLowerCase());
+            if (sig.some((s) => s === needle)) { score = 0.7; via = "opens"; }
+            else if (sig.some((s) => s.includes(needle))) { score = 0.55; via = "opens"; }
+            else return null;
+          } else return null;
           if (role && r !== role) score -= 0.4; // prefer role matches
           if (!isVisible(el)) score -= 0.5; // penalize hidden-but-matching
-          return { el, score, role: r, text: raw };
+          return { el, score, role: r, text: d.text, via };
         })
         .filter((x): x is NonNullable<typeof x> => !!x && x.score > 0.15)
         .sort((a, b) => b.score - a.score)
@@ -523,7 +664,7 @@ function buildRuntime() {
       return scored.map((s) => ({
         ref: mintRef(s.el),
         role: s.role,
-        text: s.text,
+        text: s.via ? `${s.text} (opens “${needle}”)` : s.text,
         component: nearestComponent(s.el),
         confidence: Number(Math.max(0, s.score).toFixed(2)),
       }));
@@ -670,6 +811,27 @@ function buildRuntime() {
 
     count: (selector: string) => document.querySelectorAll(selector).length,
     route: () => ({ pathname: location.pathname, search: location.search }),
+
+    /** Every identity signal for one control, so a blind agent can reason about
+     *  what it does when no single clean label exists: DOM label, component, the
+     *  text it opens/says (ancestor fiber props), and dev-only handler + source. */
+    why(ref: string) {
+      const el = document.querySelector(`[data-fs-ref="${ref}"]`);
+      if (!el) return { error: `no element for ref ${ref}` };
+      const d = controlLabel(el);
+      const prov = controlProvenance(el);
+      return {
+        ref,
+        role: roleOf(el),
+        label: d.text,
+        labelWeak: d.weak,
+        component: nearestComponent(el),
+        signals: unrenderedSignals(el),
+        handler: prov.handler,
+        source: prov.source,
+        visible: isVisible(el),
+      };
+    },
   };
 
   return api;
