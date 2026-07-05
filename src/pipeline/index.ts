@@ -325,7 +325,12 @@ async function settleAndDigest(
   settle: { quietMs?: number; timeoutMs?: number; queries?: boolean },
   baseline: DrainResult | null
 ): Promise<DigestDelta> {
-  const quietMs = settle.quietMs ?? 150;
+  // Drain-first: poll at a short cadence and return as soon as the page has been
+  // quiet twice in a row, instead of a fixed pre-sleep. A no-op click settles in
+  // ~2 polls (~50ms) instead of the old 150ms+ floor; an active one still loops
+  // until genuinely quiet. Two consecutive quiet reads guard against draining
+  // before React has committed the re-render (a single early 0 would lie "none").
+  const pollMs = settle.quietMs ?? 25;
   const timeoutMs = settle.timeoutMs ?? 3000;
   const deadline = Date.now() + timeoutMs;
 
@@ -333,9 +338,10 @@ async function settleAndDigest(
   const errors: string[] = [];
   let queriesPending = 0;
   let lastDrain: DrainResult | null = null;
+  let consecutiveQuiet = 0;
 
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, quietMs));
+    await new Promise((r) => setTimeout(r, pollMs));
     const d = await ctx.runtime<DrainResult>("drain").catch(() => null);
     if (!d) break; // navigation killed the document mid-settle; do not fabricate below
     lastDrain = d;
@@ -343,7 +349,8 @@ async function settleAndDigest(
     errors.push(...d.errors);
     queriesPending = d.queriesPending;
     const quiet = d.mutationWeight === 0 && (settle.queries === false || d.queriesPending === 0);
-    if (quiet) break;
+    consecutiveQuiet = quiet ? consecutiveQuiet + 1 : 0;
+    if (consecutiveQuiet >= 2) break;
   }
 
   const urlAfter = deps.page.url();
