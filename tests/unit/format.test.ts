@@ -96,6 +96,12 @@ describe("schema violations are located and actionable", () => {
     expect(e.some((x) => x.includes("text | count | state | settled"))).toBe(true);
   });
 
+  test("`verb: expect` (the footgun) is rejected with a fix hint", () => {
+    // Writing an assertion as its own step instead of attaching `expect:` to a step.
+    const e = errs({ name: "m", steps: [{ verb: "expect", text: "Saved" }] });
+    expect(e.some((x) => x.includes('"expect" is not a verb') && x.includes("expect:"))).toBe(true);
+  });
+
   test("malformed YAML reports a parse error, not a crash", () => {
     const r = parseMacro("name: x\n  bad: : :", { knownVerbs: VERBS });
     expect(r.ok).toBe(false);

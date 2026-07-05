@@ -13,6 +13,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { ok, err, type Result } from "../core/result.ts";
+import { RUNTIME_VERSION } from "../page-runtime/version.ts";
 import { DEFAULT_AUTH_HEADER, writeConfig, type FsConfig } from "../core/config.ts";
 import { detectPm } from "../core/pm.ts";
 import { resolveTargetRoot } from "../core/paths.ts";
@@ -84,7 +85,7 @@ export async function run(args: string[]): Promise<Result> {
 
   // Config
   const cfg: FsConfig = {
-    version: "0.1.0",
+    version: RUNTIME_VERSION,
     devUrl: `http://localhost:${port}`,
     authHeader: DEFAULT_AUTH_HEADER,
     authKeyPath,
@@ -172,10 +173,10 @@ export async function run(args: string[]): Promise<Result> {
       code: "INITIALIZED",
       warnings: finalWarnings.length ? finalWarnings : undefined,
       next_steps: [
-        "Read USAGE.md and wire `.fiber-snatcher/runtime/expose.ts` into your app/layout.tsx (dev-only import).",
+        "V2 injects its runtime via CDP — no expose.ts wiring needed. Just start your dev server.",
         "If your app has auth: add the bypass header check per USAGE.md (middleware or your proxy.ts).",
-        "Start your dev server, then run `fiber-snatcher start` to attach the browser.",
-        "Run `fiber-snatcher doctor` to verify the full loop.",
+        "Run any `fs` verb (e.g. `fs page`) — the daemon auto-starts and attaches the browser.",
+        "Run `fs doctor` to verify the full loop; tune `.fiber-snatcher/config.json` adapt for non-ARIA overlays.",
       ],
     },
   );

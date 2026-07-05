@@ -8,6 +8,7 @@ import { parseArgv, inferTarget } from "../src/cli/parse.ts";
 import { printResponse } from "../src/cli/print.ts";
 import { lookupAction, listActions } from "../src/actions/registry.ts";
 import { runDoctorCli, renderDoctor } from "../src/actions/doctor.ts";
+import { run as runInit } from "../src/cli/init.ts";
 import { DEFAULT_WAIT_TIMEOUT_MS } from "../src/pipeline/waits.ts";
 import type { FsConfig } from "../src/core/config.ts";
 import type { PushEvent } from "../src/protocol/types.ts";
@@ -31,9 +32,11 @@ targets (inferred; force with --ref/--css/--component):
   const width = Math.min(26, Math.max(...verbs.map((v) => verbLabel(v).length)) + 2);
   const commands = verbs.map((v) => `  ${verbLabel(v).padEnd(width)}${v.summary}`).join("\n");
 
-  const daemon = `daemon:
+  const daemon = `daemon + setup:
+  init                    scaffold .fiber-snatcher/ in this project
   info                    daemon + runtime status
   journal [--last N]      recent action log
+  watch console|route|network   stream page events (Ctrl-C / --for <ms>)
   profile <name>          telemetry profile (explore|debug|verify|minimal)
   actions                 machine-readable verb list
   stop                    shut the daemon down`;
@@ -201,6 +204,15 @@ async function main() {
   if (flags.cwd !== undefined) {
     console.log("✗ E_BAD_ARGS: --cwd is not supported in V2; run from the target project directory");
     return 1;
+  }
+
+  // init scaffolds .fiber-snatcher/ — it CREATES the config, so it runs before
+  // requireConfig and never touches the daemon.
+  if (cmd === "init") {
+    const res = await runInit(process.argv.slice(3));
+    if (res.ok) console.log(typeof res.data === "string" ? res.data : "✓ initialized .fiber-snatcher/");
+    else console.log(`✗ ${res.code}: ${res.message}`);
+    return res.ok ? 0 : 1;
   }
 
   // doctor diagnoses the environment, so it must NOT auto-start the daemon —

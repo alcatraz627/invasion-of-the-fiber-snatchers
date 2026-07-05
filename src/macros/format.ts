@@ -146,6 +146,11 @@ function validateStep(step: unknown, i: number, knownVerbs: Set<string> | undefi
 
   if (typeof s.verb !== "string" || !s.verb.trim()) {
     errors.push(`${at}: \`verb\` is required (e.g. click, fill, press)`);
+  } else if (s.verb === "expect") {
+    // The common authoring slip: writing an assertion as its own step
+    // (`verb: expect` + a top-level `text:`) instead of attaching `expect:` to
+    // the step it checks. It saves but has no runnable verb, so catch it here.
+    errors.push(`${at}: "expect" is not a verb — attach it to a step as \`expect: { text: … }\`, not \`verb: expect\``);
   } else if (knownVerbs && !knownVerbs.has(s.verb)) {
     const near = nearVerbs(s.verb, knownVerbs);
     errors.push(`${at}: unknown verb "${s.verb}"${near.length ? ` — did you mean ${near.join(" / ")}?` : ` — run \`fs actions\` for the verb list`}`);
