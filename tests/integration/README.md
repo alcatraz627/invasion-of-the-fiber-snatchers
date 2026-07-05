@@ -41,3 +41,17 @@ rather than spawning its own:
 The test never stops the daemon (that would end the session). Point it at a
 different app with `FS_INT_PROJECT=/path/to/project` (the project must have a
 `.fiber-snatcher/config.json` and a running, logged-in daemon).
+
+## Hands-free auto-login (local only)
+
+To skip the manual login, give the test local credentials and it fills the login
+form itself. Credentials live in one of two places, **never in this repo**:
+
+- **Env vars:** `FS_INT_EMAIL` and `FS_INT_PASSWORD` (preferred — nothing on disk).
+- **Gitignored file** in the target project: `.fiber-snatcher/integration-auth.json`
+  as `{ "email": "…", "password": "…" }`. That dir is gitignored, so it is never
+  committed.
+
+The password is typed into the app's password field, which the tool's journal
+redacts. Use this only for a local dev database — do not point it at anything with
+real credentials.

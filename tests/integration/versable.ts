@@ -5,7 +5,7 @@
  *  the daemon (that would log the user out) and self-skips when no authenticated
  *  daemon is up. Point it at another app via FS_INT_PROJECT. */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const DEFAULT_PROJECT = "/Users/alcatraz627/Code/Versable/two-enhancement-product/frontend";
@@ -26,6 +26,26 @@ export type IntTarget = {
   fs: (...argv: string[]) => Promise<IntEnvelope>;
   stop: () => Promise<void>;
 };
+
+/** Local test credentials for auto-login, from env or the target project's
+ *  gitignored `.fiber-snatcher/integration-auth.json`. Never hardcoded and never
+ *  in this (public) repo — the file lives in the target project's gitignored dir.
+ *  Returns null when unset, so the authed tier just skips instead of failing. */
+function loadCreds(project: string): { email: string; password: string } | null {
+  const email = process.env.FS_INT_EMAIL;
+  const password = process.env.FS_INT_PASSWORD;
+  if (email && password) return { email, password };
+  const f = join(project, ".fiber-snatcher", "integration-auth.json");
+  if (existsSync(f)) {
+    try {
+      const j = JSON.parse(readFileSync(f, "utf8"));
+      if (j.email && j.password) return { email: String(j.email), password: String(j.password) };
+    } catch {
+      /* malformed creds file — treat as absent */
+    }
+  }
+  return null;
+}
 
 export async function startVersable(): Promise<IntTarget> {
   const project = process.env.FS_INT_PROJECT ?? DEFAULT_PROJECT;
@@ -61,12 +81,33 @@ export async function startVersable(): Promise<IntTarget> {
   }
   await fs("navigate", "/jobs");
   await fs("wait", "--settled");
-  const url: string = (await fs("info")).data?.url ?? "";
-  const authed = !!url && !url.includes("/login");
+  let url: string = (await fs("info")).data?.url ?? "";
+  let authed = !!url && !url.includes("/login");
+
+  // If it's on /login and local creds are configured, log in by filling the form
+  // — so the authed tier runs hands-free. The password is entered into a field
+  // the journal redacts (name="password"); it never touches this repo.
+  if (!authed) {
+    const creds = loadCreds(project);
+    if (creds) {
+      await fs("navigate", "/login");
+      await fs("wait", "--settled");
+      await fs("fill", "--css", "input[type=email]", creds.email);
+      await fs("fill", "--css", "input[name=password]", creds.password);
+      await fs("wait", "--settled");
+      await fs("click", "Sign In");
+      await fs("wait", "--settled");
+      url = (await fs("info")).data?.url ?? "";
+      authed = !!url && !url.includes("/login");
+    }
+  }
+
   return {
     available: true,
     authed,
-    reason: authed ? undefined : "daemon is up but on /login — log in via its browser window, leave it running, then re-run",
+    reason: authed
+      ? undefined
+      : "on /login and no creds configured — log in via the browser window (leave it running), or set FS_INT_EMAIL/FS_INT_PASSWORD (see README)",
     fs,
     stop: noop, // never stop the user's authenticated daemon
   };
