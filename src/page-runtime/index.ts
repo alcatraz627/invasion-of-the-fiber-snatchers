@@ -219,6 +219,18 @@ function isOverlayName(name: string): boolean {
   return OVERLAY_TOKENS.some((t) => n.includes(t));
 }
 
+/** Read a prop by key without trusting it: a getter or Proxy trap that throws
+ *  (a MobX computed before load, a lazy store) must yield undefined, not crash
+ *  the caller. This is the single most important guard in the signal path — one
+ *  such prop would otherwise blind `page`/`why`/every intent-resolve page-wide. */
+function safeGet(obj: Record<string, unknown>, k: string): unknown {
+  try {
+    return obj[k];
+  } catch {
+    return undefined;
+  }
+}
+
 /** Pull human-readable strings out of an un-rendered React element / items array /
  *  config object. Bounded (shared node budget + depth cap + ≤8 strings) so a deep
  *  prop tree can't stall a snapshot. This is how a closed dropdown's item labels
@@ -229,7 +241,9 @@ function extractText(v: unknown, out: string[], depth: number, budget: { nodes: 
   budget.nodes--;
   if (v == null) return;
   if (typeof v === "string") {
-    const s = v.replace(/\s+/g, " ").trim();
+    // Slice BEFORE the whitespace collapse: the node budget caps string COUNT,
+    // not bytes, so a 1 MB prop would otherwise stall the regex.
+    const s = v.slice(0, 120).replace(/\s+/g, " ").trim();
     if (s && s.length <= 60 && !out.includes(s)) out.push(s);
     return;
   }
@@ -243,25 +257,31 @@ function extractText(v: unknown, out: string[], depth: number, budget: { nodes: 
     return;
   }
   if (isReactElement(v)) {
-    const props = v.props ?? {};
+    let props: Record<string, unknown>;
+    try {
+      props = (v.props ?? {}) as Record<string, unknown>;
+    } catch {
+      return;
+    }
     for (const k of ["children", "items", "options", "groups", "label", "title", "content"]) {
-      if (k in props) extractText((props as Record<string, unknown>)[k], out, depth - 1, budget);
+      extractText(safeGet(props, k), out, depth - 1, budget);
     }
     for (const k of LABEL_STRING_KEYS) {
-      const pv = (props as Record<string, unknown>)[k];
+      const pv = safeGet(props, k);
       if (typeof pv === "string") extractText(pv, out, depth, budget);
     }
     return;
   }
   if (typeof v === "object") {
+    const obj = v as Record<string, unknown>;
     // A menu item config like { label, tooltip, group } — read its text-ish keys.
     for (const k of [...LABEL_STRING_KEYS, "tooltip"]) {
-      const pv = (v as Record<string, unknown>)[k];
+      const pv = safeGet(obj, k);
       if (typeof pv === "string") extractText(pv, out, depth, budget);
       else if (isReactElement(pv) || Array.isArray(pv)) extractText(pv, out, depth - 1, budget);
     }
     for (const k of ["items", "options", "children"]) {
-      const pv = (v as Record<string, unknown>)[k];
+      const pv = safeGet(obj, k);
       if (Array.isArray(pv) || isReactElement(pv)) extractText(pv, out, depth - 1, budget);
     }
   }
@@ -272,26 +292,45 @@ function extractText(v: unknown, out: string[], depth: number, budget: { nodes: 
  *  Only called for weak-labelled controls; bounded up-walk + node budget. */
 function unrenderedSignals(el: Element): string[] {
   const out: string[] = [];
-  const budget = { nodes: 400 };
-  let f = fiberOf(el);
-  let hops = 0;
-  while (f && hops++ < 10 && out.length < 8 && budget.nodes > 0) {
-    const props = f.memoizedProps;
-    if (props && typeof props === "object") {
-      for (const k of CONTENT_PROP_KEYS) {
-        if (k in props) extractText((props as Record<string, unknown>)[k], out, 6, budget);
+  try {
+    const budget = { nodes: 400 };
+    let f = fiberOf(el);
+    let hops = 0;
+    while (f && hops++ < 8 && out.length < 8 && budget.nodes > 0) {
+      let props: Record<string, unknown> | null = null;
+      try {
+        const p = f.memoizedProps;
+        if (p && typeof p === "object") props = p as Record<string, unknown>;
+      } catch {
+        props = null;
       }
-      // `children` is the rendered subtree everywhere except overlay wrappers,
-      // where it is the un-mounted popover content — read it only there.
-      if (isOverlayName(displayName(f.type)) && "children" in props) {
-        extractText((props as Record<string, unknown>).children, out, 6, budget);
+      if (props) {
+        let overlay = false;
+        try {
+          overlay = isOverlayName(displayName(f.type));
+        } catch {
+          overlay = false;
+        }
+        const before = out.length;
+        // Content props (a menu's items, a tooltip body) may sit on any ancestor
+        // — real apps pass them to non-overlay wrappers (a `dropdown` prop on a
+        // button). `children` is the rendered subtree everywhere except overlay
+        // wrappers, where it is the un-mounted popover content — read it only there.
+        for (const k of CONTENT_PROP_KEYS) extractText(safeGet(props, k), out, 6, budget);
+        if (overlay) extractText(safeGet(props, "children"), out, 6, budget);
+        for (const k of LABEL_STRING_KEYS) {
+          const pv = safeGet(props, k);
+          if (typeof pv === "string") extractText(pv, out, 6, budget);
+        }
+        // Stop at the nearest ancestor that yields content: a weak icon should be
+        // described by its own wrapper's menu/tooltip, not inherit an unrelated
+        // list's labels from a distant shared ancestor (cross-contamination).
+        if (out.length > before) break;
       }
-      for (const k of LABEL_STRING_KEYS) {
-        const pv = (props as Record<string, unknown>)[k];
-        if (typeof pv === "string") extractText(pv, out, 6, budget);
-      }
+      f = f.return ?? null;
     }
-    f = f.return ?? null;
+  } catch {
+    // One hostile fiber must never blind the page — return whatever we gathered.
   }
   return out;
 }
@@ -300,24 +339,33 @@ function unrenderedSignals(el: Element): string[] {
  *  the "what does this do" evidence when even props don't name it. Both are absent
  *  in production React, so this returns undefined there. */
 function controlProvenance(el: Element): { handler?: string; source?: string } {
-  const f = fiberOf(el);
   const out: { handler?: string; source?: string } = {};
-  let g: typeof f = f;
-  let hops = 0;
-  while (g && hops++ < 6) {
-    const props = (g.memoizedProps ?? {}) as Record<string, unknown>;
-    const onClick = props.onClick ?? props.onSelect ?? props.onChange;
-    if (typeof onClick === "function" && !out.handler) {
-      const src = String(onClick).replace(/\s+/g, " ").trim();
-      if (src && src.length < 200) out.handler = src;
+  try {
+    let g = fiberOf(el);
+    let hops = 0;
+    while (g && hops++ < 6) {
+      const props = (g.memoizedProps ?? {}) as Record<string, unknown>;
+      const onClick = safeGet(props, "onClick") ?? safeGet(props, "onSelect") ?? safeGet(props, "onChange");
+      if (typeof onClick === "function" && !out.handler) {
+        // A hostile toString() must not escape — the whole point of provenance is
+        // to survive weird handlers, not crash on them.
+        try {
+          const src = String(onClick).slice(0, 400).replace(/\s+/g, " ").trim();
+          if (src && src.length < 200) out.handler = src;
+        } catch {
+          /* unreadable handler — skip */
+        }
+      }
+      const dbg = (g as { _debugSource?: { fileName?: string; lineNumber?: number } })._debugSource;
+      if (dbg?.fileName && !out.source) {
+        const file = dbg.fileName.split("/").slice(-2).join("/");
+        out.source = `${file}:${dbg.lineNumber ?? "?"}`;
+      }
+      if (out.handler && out.source) break;
+      g = g.return ?? null;
     }
-    const dbg = (g as { _debugSource?: { fileName?: string; lineNumber?: number } })._debugSource;
-    if (dbg?.fileName && !out.source) {
-      const file = dbg.fileName.split("/").slice(-2).join("/");
-      out.source = `${file}:${dbg.lineNumber ?? "?"}`;
-    }
-    if (out.handler && out.source) break;
-    g = g.return ?? null;
+  } catch {
+    /* one hostile fiber must not blind `why` */
   }
   return out;
 }
@@ -410,6 +458,19 @@ function surfaceLabel(el: Element): string {
   return el.id ? `#${el.id}` : (el.getAttribute("role") ?? el.tagName.toLowerCase());
 }
 
+const STRUCTURAL_TAGS = new Set(["html", "body", "main", "section", "nav", "header", "footer", "aside"]);
+/** A config surface selector can still name a page-layout element via a class
+ *  (`.app-main`); reject those by shape — a structural tag, or an element that
+ *  fills most of the viewport — so routine navigation isn't reported as a dialog
+ *  opening/closing (red-team atk6). A real overlay is a bounded, non-layout box. */
+function isPlausibleOverlay(el: Element): boolean {
+  if (STRUCTURAL_TAGS.has(el.tagName.toLowerCase())) return false;
+  const r = (el as HTMLElement).getBoundingClientRect();
+  const area = r.width * r.height;
+  const viewport = window.innerWidth * window.innerHeight;
+  return viewport === 0 || area <= viewport * 0.85;
+}
+
 /** Visible dialogs/popovers, keyed `role:label` — diffed across an action to
  *  report what opened/closed. */
 function currentSurfaces(): string[] {
@@ -427,7 +488,7 @@ function currentSurfaces(): string[] {
   for (const sel of ADAPT_SURFACE_SELECTORS) {
     if (out.size >= 40) break;
     try {
-      const vis = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+      const vis = Array.from(document.querySelectorAll(sel)).filter(isVisible).filter(isPlausibleOverlay);
       if (vis.length === 0 || vis.length > MAX_PER_SELECTOR) continue;
       for (const el of vis) out.add(`overlay:${surfaceLabel(el)}`);
     } catch {
@@ -624,22 +685,27 @@ function buildRuntime() {
       const flat = detailed ? els : els.filter((el) => !inCollection(el, collectionEls));
       const cap = detailed ? 250 : 60;
       const interactables = flat.slice(0, cap).map((el) => {
-        const d = controlLabel(el);
-        const entry: Record<string, unknown> = { ref: mintRef(el), role: roleOf(el), text: d.text };
-        // A weak label (id/component/tag fallback) carries the component name so
-        // an icon-only control is still identifiable — "never bare button".
-        if (d.weak || detailed) {
-          const comp = nearestComponent(el);
-          if (comp) entry.component = comp;
+        try {
+          const d = controlLabel(el);
+          const entry: Record<string, unknown> = { ref: mintRef(el), role: roleOf(el), text: d.text };
+          // A weak label (id/component/tag fallback) carries the component name so
+          // an icon-only control is still identifiable — "never bare button".
+          if (d.weak || detailed) {
+            const comp = nearestComponent(el);
+            if (comp) entry.component = comp;
+          }
+          // Weak DOM label → recover text from ancestor fiber props (closed-menu
+          // item labels, un-DOM'd tooltips) so an unlabeled icon control is still
+          // addressable by what it opens/says.
+          if (d.weak) {
+            const sig = unrenderedSignals(el);
+            if (sig.length) entry.signals = sig.slice(0, 6);
+          }
+          return entry;
+          // One control with a hostile fiber must not sink the whole snapshot.
+        } catch {
+          return { ref: mintRef(el), role: roleOf(el), text: el.id ? `#${el.id}` : el.tagName.toLowerCase() };
         }
-        // Weak DOM label → recover text from ancestor fiber props (closed-menu
-        // item labels, un-DOM'd tooltips) so an unlabeled icon control is still
-        // addressable by what it opens/says.
-        if (d.weak) {
-          const sig = unrenderedSignals(el);
-          if (sig.length) entry.signals = sig.slice(0, 6);
-        }
-        return entry;
       });
       const collectionOut = collections.map((c) => {
         const entry: Record<string, unknown> = { kind: c.kind, label: c.label, ref: mintRef(c.el), rows: c.rows };
@@ -678,26 +744,30 @@ function buildRuntime() {
       let signalBudget = 60;
       const scored = els
         .map((el) => {
-          const d = controlLabel(el);
-          const label = d.text.toLowerCase().replace(/\s+/g, " ").trim();
-          const r = roleOf(el);
-          let score = 0;
-          let via = "";
-          if (label === needle) score = 1;
-          else if (label.includes(needle)) score = 0.7 + Math.min(0.2, needle.length / Math.max(label.length, 1) / 5);
-          // No DOM-label match on a weak control: try the text it opens/says.
-          // A signal hit resolves lower than a direct label — "this control opens
-          // something called X" is weaker evidence than "this control is X".
-          else if (d.weak && signalBudget > 0) {
-            signalBudget--;
-            const sig = unrenderedSignals(el).map((s) => s.toLowerCase());
-            if (sig.some((s) => s === needle)) { score = 0.7; via = "opens"; }
-            else if (sig.some((s) => s.includes(needle))) { score = 0.55; via = "opens"; }
-            else return null;
-          } else return null;
-          if (role && r !== role) score -= 0.4; // prefer role matches
-          if (!isVisible(el)) score -= 0.5; // penalize hidden-but-matching
-          return { el, score, role: r, text: d.text, via };
+          try {
+            const d = controlLabel(el);
+            const label = d.text.toLowerCase().replace(/\s+/g, " ").trim();
+            const r = roleOf(el);
+            let score = 0;
+            let via = "";
+            if (label === needle) score = 1;
+            else if (label.includes(needle)) score = 0.7 + Math.min(0.2, needle.length / Math.max(label.length, 1) / 5);
+            // No DOM-label match on a weak control: try the text it opens/says.
+            // A signal hit resolves lower than a direct label — "this control opens
+            // something called X" is weaker evidence than "this control is X".
+            else if (d.weak && signalBudget > 0) {
+              signalBudget--;
+              const sig = unrenderedSignals(el).map((s) => s.toLowerCase());
+              if (sig.some((s) => s === needle)) { score = 0.7; via = "opens"; }
+              else if (sig.some((s) => s.includes(needle))) { score = 0.55; via = "opens"; }
+              else return null;
+            } else return null;
+            if (role && r !== role) score -= 0.4; // prefer role matches
+            if (!isVisible(el)) score -= 0.5; // penalize hidden-but-matching
+            return { el, score, role: r, text: d.text, via };
+          } catch {
+            return null; // a hostile fiber on one control must not fail the resolve
+          }
         })
         .filter((x): x is NonNullable<typeof x> => !!x && x.score > 0.15)
         .sort((a, b) => b.score - a.score)

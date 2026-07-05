@@ -21,18 +21,37 @@ import { attachScreencast, resolveScreencastOptions } from "./screencast.ts";
 import { spawnCwd } from "./env.ts";
 import type { FsAdaptConfig } from "../core/config.ts";
 
-/** Clamp a project's adapt config to arrays of short plain strings before it
- *  reaches the page — a hostile or fat config can't inject markup, blow the DOM
- *  budget, or feed a ReDoS pattern to the runtime's matchers. */
+// Structural / behavioral prop keys must never be an adapt contentPropKey: they
+// carry the whole subtree, CSS classes, or handler source, not labels — reading
+// them would surface page structure and class names as if they were a control's
+// text (red-team atk5). `children` is special-cased for overlay wrappers already.
+const DENIED_CONTENT_KEYS = new Set([
+  "children", "classname", "class", "style", "key", "ref", "dangerouslysetinnerhtml", "innerhtml",
+]);
+// Selector tags that describe page structure, not a discrete overlay — a surface
+// selector matching these reports routine navigation as a dialog open/close
+// (red-team atk6). The count guard in currentSurfaces backs this up.
+const STRUCTURAL_SELECTORS = new Set(["html", "body", "main", "section", "nav", "header", "footer", "*", "div"]);
+
+/** Clamp a project's adapt config before it reaches the page. A hostile or
+ *  careless config can't inject markup, blow the DOM budget, feed a ReDoS
+ *  pattern, or turn a 1-char token / structural key / page-container selector
+ *  into a signal/surface flood. */
 function sanitizeAdapt(a: FsAdaptConfig | undefined): FsAdaptConfig {
-  const strs = (v: unknown, cap: number): string[] =>
+  const strs = (v: unknown, cap: number, minLen: number, keep: (s: string) => boolean): string[] =>
     Array.isArray(v)
-      ? v.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 120).slice(0, cap)
+      ? v
+          .filter((x): x is string => typeof x === "string" && x.length >= minLen && x.length <= 120 && keep(x.trim()))
+          .slice(0, cap)
       : [];
   return {
-    surfaceSelectors: strs(a?.surfaceSelectors, 20),
-    overlayComponents: strs(a?.overlayComponents, 40),
-    contentPropKeys: strs(a?.contentPropKeys, 40),
+    // A surface selector that is a bare structural tag is rejected (a real
+    // overlay selector is a class/id/attr, not `main`).
+    surfaceSelectors: strs(a?.surfaceSelectors, 20, 1, (s) => !STRUCTURAL_SELECTORS.has(s.toLowerCase())),
+    // Overlay tokens ≥3 chars: a 1-2 char substring matches nearly every
+    // component name and floods every control's signals (red-team atk4).
+    overlayComponents: strs(a?.overlayComponents, 40, 3, () => true),
+    contentPropKeys: strs(a?.contentPropKeys, 40, 1, (s) => !DENIED_CONTENT_KEYS.has(s.toLowerCase())),
   };
 }
 

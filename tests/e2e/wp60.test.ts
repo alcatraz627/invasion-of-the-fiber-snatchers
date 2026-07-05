@@ -52,6 +52,45 @@ describe("WP60 adaptation — with adapt config", () => {
   }, 15_000);
 });
 
+describe("WP60 red-team resilience", () => {
+  let t: Target;
+  beforeAll(async () => {
+    t = await startTarget({ adapt: { overlayComponents: ["a"], contentPropKeys: ["className", "children"] } });
+    expect((await t.fs("info")).ok).toBe(true);
+    await t.fs("wait", "--settled");
+  }, 40_000);
+  afterAll(async () => t.stop());
+
+  test("a control with a throwing-getter prop does NOT crash page/why/resolve", async () => {
+    // The worst break: one poisoned fiber blinding the whole page. Attach a
+    // React element with a throwing getter to a real control's fiber prop.
+    await t.fs(
+      "eval",
+      `(() => {
+        const b = document.querySelector('#icon-only');
+        const k = Object.keys(b).find((x) => x.startsWith('__reactProps$'));
+        const bad = { get children() { throw new Error('poisoned'); }, get tooltip() { throw new Error('poisoned'); } };
+        const el = { $$typeof: Symbol.for('react.element'), type: 'div', props: bad };
+        const fk = Object.keys(b).find((x) => x.startsWith('__reactFiber$'));
+        if (b[fk]) b[fk].memoizedProps = { dropdown: el };
+        return true;
+      })()`
+    );
+    expect((await t.fs("page")).ok).toBe(true);
+    expect((await t.fs("why", "--css", "#icon-only")).ok).toBe(true);
+    expect((await t.fs("click", "Open Fake Modal")).ok).toBe(true);
+  }, 20_000);
+
+  test("a 1-char overlay token and structural content keys yield no signal flood", async () => {
+    const res = await t.fs("why", "--css", "#export-trigger");
+    // adapt.overlayComponents=["a"] and contentPropKeys=["className","children"]
+    // were all rejected by sanitizeAdapt, so recovery falls back to the built-in
+    // path (export-trigger's own Flyout/Dropdown menu), never a subtree flood.
+    const sig = (res.data.signals as string[]) ?? [];
+    expect(sig.every((s) => !s.includes("btn ") && s.length <= 60)).toBe(true);
+  }, 15_000);
+});
+
 describe("WP60 adaptation — WITHOUT adapt config (baseline)", () => {
   let t: Target;
   beforeAll(async () => {
