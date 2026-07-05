@@ -87,15 +87,22 @@ export async function startVersable(): Promise<IntTarget> {
   // If it's on /login and local creds are configured, log in by filling the form
   // — so the authed tier runs hands-free. The password is entered into a field
   // the journal redacts (name="password"); it never touches this repo.
+  let triedLogin = false;
   if (!authed) {
     const creds = loadCreds(project);
     if (creds) {
+      triedLogin = true;
       await fs("navigate", "/login");
       await fs("wait", "--settled");
       await fs("fill", "--css", "input[type=email]", creds.email);
       await fs("fill", "--css", "input[name=password]", creds.password);
       await fs("wait", "--settled");
       await fs("click", "Sign In");
+      // NextAuth verifies the credentials and redirects ASYNCHRONOUSLY, so a
+      // DOM-settle returns while still on /login. Wait for the URL to actually
+      // reach the post-login page; this times out cleanly (→ authed:false) if the
+      // password was wrong, instead of racing the redirect into the next command.
+      await fs("wait", "--url", "/jobs");
       await fs("wait", "--settled");
       url = (await fs("info")).data?.url ?? "";
       authed = !!url && !url.includes("/login");
@@ -107,7 +114,9 @@ export async function startVersable(): Promise<IntTarget> {
     authed,
     reason: authed
       ? undefined
-      : "on /login and no creds configured — log in via the browser window (leave it running), or set FS_INT_EMAIL/FS_INT_PASSWORD (see README)",
+      : triedLogin
+        ? "auto-login failed — check the password in .fiber-snatcher/integration-auth.json (or FS_INT_PASSWORD)"
+        : "on /login and no creds configured — log in via the browser, or set FS_INT_EMAIL/FS_INT_PASSWORD (see README)",
     fs,
     stop: noop, // never stop the user's authenticated daemon
   };
