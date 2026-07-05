@@ -10,13 +10,18 @@
  *   response: {id, ok, data|error}
  */
 
-import { chromium, type BrowserContext, type Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { FsConfig } from "./config.ts";
 
+// `chromium` (the runtime value) is imported lazily inside openPersistent — the
+// only caller — so this module's path helpers (controlSocketPath, v2SocketPath)
+// can be imported by the CLI without dragging Playwright's ~110ms load into
+// every `fs` call. Only the daemon actually launches a browser.
 export async function openPersistent(cfg: FsConfig): Promise<{ context: BrowserContext; page: Page }> {
+  const { chromium } = await import("playwright");
   const context = await chromium.launchPersistentContext(cfg.profileDir, {
     // Config field, not env: test harnesses set headless per-project
     headless: cfg.headless === true,

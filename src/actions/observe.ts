@@ -1,8 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { FsErrorShaped, type ActionDef } from "../pipeline/contracts.ts";
-import { getScreencast } from "../daemon/screencast.ts";
-import { runVision } from "../vision/sidecar.ts";
+// screencast.ts pulls Playwright's CDP layer and vision/sidecar spawns a child;
+// both are daemon-only. They're imported lazily inside the run functions so the
+// CLI (which imports the registry for help + alias normalization) doesn't drag
+// the whole browser stack in on every `fs` call — ~110ms of startup avoided.
 
 type ShootArgs = { path?: string; selector?: string; at?: number; shotsDir: string };
 type PageArgs = { budget?: "concise" | "detailed"; scope?: string };
@@ -30,6 +32,7 @@ export const observeActions: (ActionDef<ShootArgs> | ActionDef<PageArgs> | Actio
     observation: true,
     settle: false,
     async run(ctx, args: ShootArgs) {
+      const { getScreencast } = await import("../daemon/screencast.ts");
       const ring = getScreencast(ctx.page);
       const t0 = Date.now();
       let source: "ring" | "live";
@@ -84,6 +87,7 @@ export const observeActions: (ActionDef<ShootArgs> | ActionDef<PageArgs> | Actio
       const shot = join(args.shotsDir, `look-${Date.now()}.png`);
       if (args.selector) await ctx.page.locator(args.selector).first().screenshot({ path: shot });
       else await ctx.page.screenshot({ path: shot, fullPage: false });
+      const { runVision } = await import("../vision/sidecar.ts");
       const vision = await runVision(shot, args.prompt);
       const out: Record<string, unknown> = { description: vision.description, shot };
       if (args.prompt) out.prompt = args.prompt;
@@ -100,6 +104,7 @@ export const observeActions: (ActionDef<ShootArgs> | ActionDef<PageArgs> | Actio
     observation: true,
     settle: false,
     async run(ctx, args: RecordArgs) {
+      const { getScreencast } = await import("../daemon/screencast.ts");
       const ring = getScreencast(ctx.page);
       if (!ring) throw new FsErrorShaped({ code: "E_INTERNAL", message: "screencast controller is not attached to this page" });
       const action = args.action;
