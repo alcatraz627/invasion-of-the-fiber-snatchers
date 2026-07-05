@@ -370,6 +370,18 @@ function controlProvenance(el: Element): { handler?: string; source?: string } {
   return out;
 }
 
+/** How likely a control is a dropdown/menu trigger, from DOM markers only —
+ *  used to spend the resolveIntent signal budget on real overlay triggers first
+ *  on a large page, before arbitrary weak icons. */
+function triggerRank(el: Element): number {
+  let r = 0;
+  if (el.hasAttribute("aria-haspopup")) r += 2;
+  if (el.hasAttribute("aria-expanded") || el.hasAttribute("aria-controls")) r += 1;
+  const cls = typeof el.className === "string" ? el.className : "";
+  if (/dropdown|menu|caret|combobox|popover|select/i.test(`${el.id} ${cls}`)) r += 1;
+  return r;
+}
+
 function isVisible(el: Element): boolean {
   const he = el as HTMLElement;
   const cs = getComputedStyle(he);
@@ -738,7 +750,12 @@ function buildRuntime() {
       // Include hidden matches but penalize them, so the sole match being hidden
       // surfaces as a low-confidence candidate ("it exists but you can't see it")
       // rather than a bare E_TARGET_NOT_FOUND.
-      const els = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR));
+      // Order likely dropdown/menu triggers first (a cheap DOM-only rank, no
+      // fiber walk) so the bounded signal budget below reaches the real overlay
+      // controls before arbitrary weak icons on a 247-button modal.
+      const els = Array.from(document.querySelectorAll(INTERACTABLE_SELECTOR)).sort(
+        (a, b) => triggerRank(b) - triggerRank(a)
+      );
       // Signal extraction (ancestor fiber props) is bounded per resolve so a
       // label-hostile page with many weak controls can't blow the budget.
       let signalBudget = 60;
