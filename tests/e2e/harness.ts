@@ -32,7 +32,7 @@ export type Target = {
   stop: () => Promise<void>;
 };
 
-export async function startTarget(): Promise<Target> {
+export async function startTarget(opts?: { adapt?: unknown }): Promise<Target> {
   const fixture = await startFixture();
   const dir = mkdtempSync(join(tmpdir(), "fs-e2e-"));
   const dd = join(dir, ".fiber-snatcher");
@@ -53,6 +53,7 @@ export async function startTarget(): Promise<Target> {
       cdpPortHint: 0,
       sources: { nextDevCommand: "", pm: "bun" },
       adapters: [],
+      ...(opts?.adapt ? { adapt: opts.adapt } : {}),
     })
   );
 

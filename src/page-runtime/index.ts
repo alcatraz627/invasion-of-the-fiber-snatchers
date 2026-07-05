@@ -193,12 +193,31 @@ function isReactElement(v: unknown): v is ReactElementish {
   );
 }
 
+// Per-project adaptation (set on window before this runs; see server.ts +
+// core/config.ts). A codebase teaches the tool its conventions here; the built-in
+// defaults handle the common cases. Read once, tolerant of absence.
+type AdaptCfg = { surfaceSelectors?: string[]; overlayComponents?: string[]; contentPropKeys?: string[] };
+const ADAPT: AdaptCfg = (() => {
+  try {
+    const a = (window as unknown as { __fsAdapt?: AdaptCfg }).__fsAdapt;
+    return a && typeof a === "object" ? a : {};
+  } catch {
+    return {};
+  }
+})();
+
 // Props that carry the content a control opens (a menu's items, a tooltip's body)
 // or a human label, read straight off an ancestor fiber. `children` is read only
 // from overlay wrappers (below) because elsewhere it is just the rendered subtree.
-const CONTENT_PROP_KEYS = ["tooltip", "content", "dropdown", "menu", "items", "options", "groups"];
+const CONTENT_PROP_KEYS = ["tooltip", "content", "dropdown", "menu", "items", "options", "groups", ...(ADAPT.contentPropKeys ?? [])];
 const LABEL_STRING_KEYS = ["title", "label", "aria-label", "text", "alt", "placeholder"];
-const OVERLAY_COMPONENT = /dropdown|menu|tooltip|popover|popper|float|overlay|select/i;
+// Substring tokens (not a regex — avoids a config-supplied ReDoS) marking a fiber
+// as an overlay wrapper whose `children` are un-mounted content.
+const OVERLAY_TOKENS = ["dropdown", "menu", "tooltip", "popover", "popper", "float", "overlay", "select", ...(ADAPT.overlayComponents ?? []).map((s) => s.toLowerCase())];
+function isOverlayName(name: string): boolean {
+  const n = name.toLowerCase();
+  return OVERLAY_TOKENS.some((t) => n.includes(t));
+}
 
 /** Pull human-readable strings out of an un-rendered React element / items array /
  *  config object. Bounded (shared node budget + depth cap + ≤8 strings) so a deep
@@ -264,7 +283,7 @@ function unrenderedSignals(el: Element): string[] {
       }
       // `children` is the rendered subtree everywhere except overlay wrappers,
       // where it is the un-mounted popover content — read it only there.
-      if (OVERLAY_COMPONENT.test(displayName(f.type)) && "children" in props) {
+      if (isOverlayName(displayName(f.type)) && "children" in props) {
         extractText((props as Record<string, unknown>).children, out, 6, budget);
       }
       for (const k of LABEL_STRING_KEYS) {
@@ -375,8 +394,11 @@ function inCollection(el: Element, collectionEls: Set<Element>): boolean {
   return false;
 }
 
-// Dialogs/popovers whose appearance/disappearance is a T0 digest signal.
+// Dialogs/popovers whose appearance/disappearance is a T0 digest signal. Beyond
+// the ARIA roles, a project can name non-ARIA overlays (a URL-state modal, a
+// class-based popover) via adapt.surfaceSelectors.
 const SURFACE_SELECTOR = "[role=dialog],[role=alertdialog],[role=listbox],[role=menu]";
+const ADAPT_SURFACE_SELECTORS = (ADAPT.surfaceSelectors ?? []).slice(0, 20);
 
 function surfaceLabel(el: Element): string {
   const aria = el.getAttribute("aria-label");
@@ -391,9 +413,28 @@ function surfaceLabel(el: Element): string {
 /** Visible dialogs/popovers, keyed `role:label` — diffed across an action to
  *  report what opened/closed. */
 function currentSurfaces(): string[] {
-  return Array.from(document.querySelectorAll(SURFACE_SELECTOR))
-    .filter(isVisible)
-    .map((el) => `${el.getAttribute("role")}:${surfaceLabel(el)}`);
+  const out = new Set<string>();
+  for (const el of Array.from(document.querySelectorAll(SURFACE_SELECTOR))) {
+    if (isVisible(el)) out.add(`${el.getAttribute("role")}:${surfaceLabel(el)}`);
+    if (out.size >= 40) break;
+  }
+  // Config-named non-ARIA overlays, keyed `overlay:`. Each selector is queried in
+  // isolation (a bad selector can't wipe the read) AND rejected if it matches
+  // many visible elements — a discrete overlay matches a few, so a broad or
+  // hostile selector (`*`, `div`) that floods the digest is a misconfiguration,
+  // not a surface. Skip it rather than drown real open/close signals in noise.
+  const MAX_PER_SELECTOR = 6;
+  for (const sel of ADAPT_SURFACE_SELECTORS) {
+    if (out.size >= 40) break;
+    try {
+      const vis = Array.from(document.querySelectorAll(sel)).filter(isVisible);
+      if (vis.length === 0 || vis.length > MAX_PER_SELECTOR) continue;
+      for (const el of vis) out.add(`overlay:${surfaceLabel(el)}`);
+    } catch {
+      // invalid selector in a project's config — skip it, don't crash the digest
+    }
+  }
+  return [...out];
 }
 
 /** The focused control's label, or null when focus rests on the body / an

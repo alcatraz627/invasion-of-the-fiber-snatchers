@@ -19,6 +19,22 @@ import { FsErrorShaped, type TelemetryProfile } from "../pipeline/contracts.ts";
 import { RUNTIME_VERSION } from "../page-runtime/version.ts";
 import { attachScreencast, resolveScreencastOptions } from "./screencast.ts";
 import { spawnCwd } from "./env.ts";
+import type { FsAdaptConfig } from "../core/config.ts";
+
+/** Clamp a project's adapt config to arrays of short plain strings before it
+ *  reaches the page — a hostile or fat config can't inject markup, blow the DOM
+ *  budget, or feed a ReDoS pattern to the runtime's matchers. */
+function sanitizeAdapt(a: FsAdaptConfig | undefined): FsAdaptConfig {
+  const strs = (v: unknown, cap: number): string[] =>
+    Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 120).slice(0, cap)
+      : [];
+  return {
+    surfaceSelectors: strs(a?.surfaceSelectors, 20),
+    overlayComponents: strs(a?.overlayComponents, 40),
+    contentPropKeys: strs(a?.contentPropKeys, 40),
+  };
+}
 
 /** minimal profile: strip the digest to the dead-click signal + errors so a
  *  terse-T0 session pays no attention tax on surfaces/counts/focus/queries. */
@@ -168,6 +184,10 @@ async function main() {
 
   const runtimeBundle = await buildRuntimeBundle();
   const { context, page } = await openPersistent(cfg);
+  // Adapt config is set on window BEFORE the runtime bundle runs, so the runtime
+  // reads it at init. Sanitized here (arrays of short strings only) so a bad
+  // config can't inject markup or hand the page a hostile value.
+  await context.addInitScript(`window.__fsAdapt=${JSON.stringify(sanitizeAdapt(cfg.adapt))};`);
   await context.addInitScript(runtimeBundle);
 
   // The rolling screencast is attached now but stays OFF until a `profile debug`

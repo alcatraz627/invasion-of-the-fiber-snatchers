@@ -35,6 +35,24 @@ export type FsConfig = {
   // Adapters enabled on the expose.ts surface. V1 supports "redux", "zustand".
   // V1.1 will add "tanstack-query", "jotai".
   adapters: string[];
+  // Per-project adaptation: the tool assumes ARIA roles + accessible names, but
+  // real apps vary. These let a codebase teach the tool its conventions —
+  // non-ARIA overlay containers, custom overlay component names, extra
+  // label-bearing props — without a code change. All optional; omitted fields
+  // use the runtime defaults. See src/page-runtime/adapt.ts.
+  adapt?: FsAdaptConfig;
+};
+
+export type FsAdaptConfig = {
+  /** CSS selectors for overlays that are NOT ARIA dialogs/menus (a URL-state
+   *  modal, a class-based popover) — tracked in the surfaces digest alongside
+   *  [role=dialog]. */
+  surfaceSelectors?: string[];
+  /** Extra component-name substrings (lowercased, matched loosely) that mark a
+   *  fiber as an overlay wrapper whose `children` hold un-mounted content. */
+  overlayComponents?: string[];
+  /** Extra prop keys that carry a control's opened content or label text. */
+  contentPropKeys?: string[];
 };
 
 export const DEFAULT_AUTH_HEADER = "X-Fiber-Snatcher-Key";

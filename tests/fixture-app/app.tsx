@@ -424,6 +424,39 @@ function FakeTooltip({ content, children }: { content: string; children: ReactNo
   );
 }
 
+// WP60 trap: a modal with NO role=dialog (a plain div toggled by class), like
+// Versable's URL-state preview modal — invisible to ARIA-only surface tracking.
+// The adapt config's surfaceSelectors=[".fs-fake-modal"] makes the digest see it.
+function NonAriaModal() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button id="open-fake-modal" onClick={() => setOpen(true)}>Open Fake Modal</button>
+      {open && (
+        <div className="fs-fake-modal" style={{ border: "2px solid teal", padding: 16 }}>
+          <h3>Fake Modal (no role)</h3>
+          <button id="close-fake-modal" onClick={() => setOpen(false)}>Dismiss</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A custom overlay whose name matches NONE of the built-in tokens (dropdown/
+// menu/tooltip/...), so its closed content is unreadable until a project adds
+// "flyout" to adapt.overlayComponents. Proves the adapt config extends WP9.
+function Flyout({ triggerId, children }: { triggerId: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="fs-flyout">
+      <button id={triggerId} onClick={() => setOpen((o) => !o)}>
+        <svg width="16" height="16" aria-hidden="true"><polygon points="0,0 12,6 0,12" /></svg>
+      </button>
+      {open && children}
+    </span>
+  );
+}
+
 function LabelHostileToolbar() {
   const exportItems: MenuItem[] = [
     { label: <MenuItemLabel title="Export All Sheets" />, tooltip: "Download the whole file" },
@@ -439,6 +472,9 @@ function LabelHostileToolbar() {
           <svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6" /></svg>
         </button>
       </FakeTooltip>
+      <Flyout triggerId="flyout-trigger">
+        <FakeMenu items={[{ label: <MenuItemLabel title="Archive Job" />, tooltip: "Move to archive" }]} />
+      </Flyout>
     </div>
   );
 }
@@ -520,6 +556,7 @@ function App() {
       <WindowedList />
       <NetParts />
       <LabelHostileToolbar />
+      <NonAriaModal />
     </main>
   );
 }
