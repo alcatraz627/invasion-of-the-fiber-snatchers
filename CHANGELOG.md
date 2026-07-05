@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.1.0] — 2026-07-05
+
+### Follow-up round: adaptation, perf, hardening, live-app testing
+
+Built on 2.0.0 after a live dogfood on the Versable app surfaced gaps. 186 tests
+(173 fixture e2e/unit/protocol + 13 live-app integration).
+
+**New capability:**
+- Per-project adaptation (`adapt` config: `surfaceSelectors`, `overlayComponents`,
+  `contentPropKeys`) so the tool tracks non-ARIA overlays and reads a codebase's
+  own conventions instead of assuming ARIA.
+- `why` verb + un-rendered signal reader: recovers a closed dropdown/tooltip's
+  content from ancestor fiber props without opening it (React evaluates the menu
+  element at the parent's render, so it's a readable prop value while closed).
+- `fs init` wired on the V2 CLI; version stamp, `watch`/`init` in help, macro
+  `expect`-footgun guard.
+- Live-app integration test (`tests/integration/`): drives a real running dev app
+  through its authenticated session, with optional hands-free auto-login.
+
+**Performance:**
+- Settle drain-first: ~166ms → ~65ms on a quiet action.
+- CLI startup: ~130ms → ~31ms per `fs` call (Playwright loaded lazily, only in
+  the daemon).
+
+**Hardening (adversarial red-team):** per-fiber try/catch so one throwing prop
+getter can't blind the whole page; adapt-config sanitization (min token length,
+structural-key deny-list, surface plausibility); byte-bounded string extraction.
+
 ## [2.0.0] — 2026-07-04
 
 ### V2: the agent-first rebuild

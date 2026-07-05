@@ -18,8 +18,8 @@ no-push-without-approval rule; below is everything staged for you.
 
 ```sh
 cd ~/Code/Claude/invasion-of-the-fiber-snatchers
-git checkout main && git merge --no-ff v2 -m "Release 2.0.0 — agent-first rebuild"
-git tag -a v2.0.0 -m "V2: refs, digests, waits, macros, adaptation layer"
+git checkout main && git merge --no-ff v2 -m "Release 2.1.0 — agent-first rebuild"
+git tag -a v2.1.0 -m "V2.1: refs, digests, waits, macros, adaptation layer, live-app integration test"
 git push origin main --tags          # fresh approval each time
 bash scripts/install.sh              # relink ~/.local/bin/fs to the merged code
 fs doctor                            # confirm the loop

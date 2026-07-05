@@ -1,6 +1,6 @@
 {
   "name": "fiber-snatcher",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Fiber Snatcher — an agent-first driver for local React dev apps: refs, digests, waits, macros, and fiber-level state access.",
   "private": true,
   "type": "module",
