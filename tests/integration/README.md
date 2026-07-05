@@ -26,16 +26,18 @@ browser profile is busy, so it never false-fails in an environment it can't reac
 
 ## Enabling the authenticated tier
 
-The app uses a real login session; the fiber-snatcher bypass header alone does not
-authenticate (it redirects to `/login`). The test inherits a session from the
-project's real browser profile, so log in once:
+This app's login session lives in the running browser context and does NOT survive
+a daemon restart (stopping the daemon logs you out; the bypass header alone just
+redirects to `/login`). So the test drives the **already-running** daemon in place
+rather than spawning its own:
 
 1. Start the interactive daemon in the Versable frontend and let it open the
    browser: `cd <versable>/frontend && fs navigate /jobs`.
 2. Log in through that browser window.
-3. Stop the interactive daemon (`fs stop`) so the profile lock is released.
-4. Run the test — it reuses that now-logged-in profile headlessly and the authed
-   tier runs.
+3. **Leave it running** — do not `fs stop`.
+4. Run the test — it connects to that live, authenticated daemon and the authed
+   tier runs (you'll see it drive the visible browser).
 
-Point it at a different app with `FS_INT_PROJECT=/path/to/project` (the project
-must have a `.fiber-snatcher/config.json` and a running dev server).
+The test never stops the daemon (that would end the session). Point it at a
+different app with `FS_INT_PROJECT=/path/to/project` (the project must have a
+`.fiber-snatcher/config.json` and a running, logged-in daemon).
