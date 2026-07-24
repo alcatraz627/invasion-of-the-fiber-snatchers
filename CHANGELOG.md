@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased] — branch `v2-adapters`
+
+### Adapter round: project adapters, generalized settle, lifecycle fixes
+
+Driven by enabling two non-TanStack Versable apps (playground, speedway). 190 tests.
+
+**New capability:**
+- Project-local adapters: `.fiber-snatcher/adapter.js` is injected on every
+  document after the runtime; `window.__fs.register(name, adapter)` survives
+  reloads for free. Size-capped; broken files fail in isolation; `doctor` gains
+  `project-adapter` and `activity` probes.
+- Generalized settle: any adapter carrying `activity(): {pending, started}` feeds
+  `wait --settled` and the per-verb drain (TanStack is now just source #1).
+- Native `<dialog>` is a first-class surface (`dialog[open]` in the selector,
+  `dialog:<label>` keys) — implicit-ARIA modals digest like role=dialog ones.
+
+**Hardening (adversarial-gate findings):**
+- `register()` rejects the reserved names `queries`/`jotai` (clobber displaced the
+  real TanStack wiring and doctor's filter hid it).
+- Activity reads coerced + clamped — a NaN/stringly/negative count from one
+  adapter jammed every settle wait on the page forever.
+- Throwing `activity()` sources read as idle but are named by a doctor warn.
+
+**Lifecycle fixes:**
+- `fs stop` waits for actual daemon death (the ack-then-race lost the next verb's
+  navigation); the pidfile is an exclusive-create boot lock taken before Chrome
+  opens, with ownership-checked cleanup.
+- `smoke` pins runtimeVersion to the source constant instead of a stale literal.
+
 ## [2.1.0] — 2026-07-05
 
 ### Follow-up round: adaptation, perf, hardening, live-app testing
