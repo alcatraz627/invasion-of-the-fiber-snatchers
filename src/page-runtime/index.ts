@@ -464,7 +464,10 @@ function inCollection(el: Element, collectionEls: Set<Element>): boolean {
 // Dialogs/popovers whose appearance/disappearance is a T0 digest signal. Beyond
 // the ARIA roles, a project can name non-ARIA overlays (a URL-state modal, a
 // class-based popover) via adapt.surfaceSelectors.
-const SURFACE_SELECTOR = "[role=dialog],[role=alertdialog],[role=listbox],[role=menu]";
+// `dialog[open]` (not bare `dialog`): native dialogs carry an implicit ARIA role
+// that attribute selectors can't see, and closed <dialog> shells are mounted but
+// not a surface until shown.
+const SURFACE_SELECTOR = "[role=dialog],[role=alertdialog],[role=listbox],[role=menu],dialog[open]";
 const ADAPT_SURFACE_SELECTORS = (ADAPT.surfaceSelectors ?? []).slice(0, 20);
 
 function surfaceLabel(el: Element): string {
@@ -495,7 +498,8 @@ function isPlausibleOverlay(el: Element): boolean {
 function currentSurfaces(): string[] {
   const out = new Set<string>();
   for (const el of Array.from(document.querySelectorAll(SURFACE_SELECTOR))) {
-    if (isVisible(el)) out.add(`${el.getAttribute("role")}:${surfaceLabel(el)}`);
+    // A native <dialog> has an implicit role no attribute read can see.
+    if (isVisible(el)) out.add(`${el.getAttribute("role") ?? el.tagName.toLowerCase()}:${surfaceLabel(el)}`);
     if (out.size >= 40) break;
   }
   // Config-named non-ARIA overlays, keyed `overlay:`. Each selector is queried in
