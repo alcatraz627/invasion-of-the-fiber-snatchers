@@ -84,6 +84,15 @@ describe("project adapter injection + generalized activity", () => {
     expect(elapsed).toBeGreaterThan(1000);
   }, 20_000); // 3s drain + ~2s residue outruns bun's 5s default test timeout
 
+  test("hidden dropzone file inputs are listed and marked in the snapshot", async () => {
+    const page = await t.fs("page");
+    const fileInputs = (page.data?.interactables ?? []).filter(
+      (i: { text?: string; hidden?: boolean }) => (i.text ?? "").includes("dropzone upload")
+    );
+    expect(fileInputs.length).toBe(1);
+    expect(fileInputs[0].hidden).toBe(true);
+  });
+
   test("adapter activity is visible alongside built-in discovery", async () => {
     const res = await t.fs("dispatch", "--adapter", "demo", '{"op":"echo","value":1}');
     expect(res.ok).toBe(true);

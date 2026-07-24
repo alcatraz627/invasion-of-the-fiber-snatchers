@@ -734,6 +734,13 @@ function buildRuntime() {
       const collections = namedCollections(scopeEl);
       const collectionEls = new Set(collections.map((c) => c.el));
       const els = Array.from(scopeEl.querySelectorAll(INTERACTABLE_SELECTOR)).filter(isVisible);
+      // Hidden file inputs are the one actionable-while-invisible class: dropzone
+      // patterns hide the <input type=file> behind a styled surface, but `upload`
+      // drives it fine — so list them (marked) instead of leaving the agent to
+      // guess a --css selector for a control the snapshot never showed.
+      for (const el of Array.from(scopeEl.querySelectorAll('input[type="file"]'))) {
+        if (!isVisible(el) && !els.includes(el)) els.push(el);
+      }
       // Concise mode collapses controls inside a collection into its summary — a
       // 10k-row table must not enumerate 10k refs. --scope <selector> paginates
       // into one collection when the agent needs its individual controls.
@@ -743,6 +750,7 @@ function buildRuntime() {
         try {
           const d = controlLabel(el);
           const entry: Record<string, unknown> = { ref: mintRef(el), role: roleOf(el), text: d.text };
+          if ((el as HTMLInputElement).type === "file" && !isVisible(el)) entry.hidden = true;
           // A weak label (id/component/tag fallback) carries the component name so
           // an icon-only control is still identifiable — "never bare button".
           if (d.weak || detailed) {

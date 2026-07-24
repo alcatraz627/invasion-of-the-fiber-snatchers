@@ -308,6 +308,14 @@ function UploadBox() {
         onChange={(e) => setNames(Array.from(e.target.files ?? []).map((f) => f.name))}
       />
       <span id="fs-file-names">{names.join(", ")}</span>
+      {/* Dropzone pattern: the real input hides behind a styled surface. */}
+      <input
+        id="fs-file-hidden"
+        type="file"
+        aria-label="dropzone upload"
+        style={{ display: "none" }}
+        onChange={(e) => setNames(Array.from(e.target.files ?? []).map((f) => f.name))}
+      />
     </div>
   );
 }
