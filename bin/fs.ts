@@ -2,7 +2,9 @@
 /** V2 CLI entry: parse → auto-start daemon → request → print. One invocation
  *  does everything, cold or warm (`fs click "Save"` works from a dead start). */
 
+import { existsSync, promises as fsp } from "node:fs";
 import { requireConfig, ConfigError } from "../src/core/config.ts";
+import { v2PidFile, v2SocketPath } from "../src/core/browser.ts";
 import { connectDaemon } from "../src/daemon/lifecycle.ts";
 import { parseArgv, inferTarget } from "../src/cli/parse.ts";
 import { printResponse } from "../src/cli/print.ts";
@@ -590,9 +592,27 @@ async function main() {
 
     const wireCmd = cmd === "stop" ? "close" : cmd;
     const res = await client.request(wireCmd, args, reqTimeout);
+    // The daemon acks `close` BEFORE its shutdown runs (browser close included).
+    // Returning on the ack lets the caller's next verb race a dying Chrome for
+    // the profile — the fresh daemon's boot then silently swallows that verb's
+    // navigation. Hold until the daemon is genuinely gone, bounded.
+    if (cmd === "stop" && res.ok) await waitForDaemonExit(cfg);
     return printResponse(res, !!flags.json);
   } finally {
     client.close();
+  }
+}
+
+/** Poll until the V2 daemon's pid is dead and its socket file is gone. */
+async function waitForDaemonExit(cfg: FsConfig, timeoutMs = 8000): Promise<void> {
+  const pidFile = v2PidFile(cfg);
+  const sock = v2SocketPath(cfg);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const pid = Number(await fsp.readFile(pidFile, "utf8").catch(() => "0"));
+    const alive = pid > 0 && (() => { try { process.kill(pid, 0); return true; } catch { return false; } })();
+    if (!alive && !existsSync(sock)) return;
+    await new Promise((r) => setTimeout(r, 100));
   }
 }
 

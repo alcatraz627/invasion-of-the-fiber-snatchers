@@ -221,6 +221,32 @@ async function main() {
     await fs.rm(sockPath, { force: true });
   }
 
+  // The socket probe alone cannot serialize two daemons booting in the same
+  // window (both pass it before either binds). The pidfile is the boot lock:
+  // exclusive-create BEFORE Chrome opens, so the loser exits without ever
+  // touching the shared browser profile — a second openPersistent on one
+  // profile lets the loser's boot goto navigate the winner's window, and its
+  // cleanup used to delete the winner's pidfile, orphaning the daemon from
+  // `fs stop` forever. A pidfile holding a dead pid is stale; take it over.
+  await fs.mkdir(join(pidFile, ".."), { recursive: true }).catch(() => {});
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.writeFile(pidFile, String(process.pid), { flag: "wx" });
+      break;
+    } catch {
+      const holder = Number(await fs.readFile(pidFile, "utf8").catch(() => "0"));
+      if (holder && pidAlive(holder)) {
+        console.error(`another V2 daemon (pid ${holder}) is booting/serving this project; exiting`);
+        process.exit(1);
+      }
+      await fs.rm(pidFile, { force: true }).catch(() => {});
+      if (attempt >= 3) {
+        console.error("could not acquire the daemon pidfile lock; exiting");
+        process.exit(1);
+      }
+    }
+  }
+
   const runtimeBundle = await buildRuntimeBundle();
   const { context, page } = await openPersistent(cfg);
   // Adapt config is set on window BEFORE the runtime bundle runs, so the runtime
@@ -406,16 +432,22 @@ async function main() {
     try { server.close(); } catch { /* already down */ }
     try { await context.close(); } catch { /* already down */ }
     try { await fs.rm(sockPath, { force: true }); } catch { /* gone */ }
-    try { await fs.rm(pidFile, { force: true }); } catch { /* gone */ }
+    // Remove the pidfile only if this process owns it — a losing boot must
+    // never delete the winner's lock.
+    try {
+      const holder = Number(await fs.readFile(pidFile, "utf8").catch(() => "0"));
+      if (holder === process.pid) await fs.rm(pidFile, { force: true });
+    } catch { /* gone */ }
     await journal.close();
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
   context.on("close", () => shutdown());
+}
 
-  await fs.mkdir(join(pidFile, ".."), { recursive: true }).catch(() => {});
-  await fs.writeFile(pidFile, String(process.pid));
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 main().catch((e) => {
