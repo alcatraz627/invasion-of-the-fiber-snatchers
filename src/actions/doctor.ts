@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { ActionDef, PipelineCtx } from "../pipeline/contracts.ts";
 import { RUNTIME_VERSION } from "../page-runtime/version.ts";
 import { loadConfig } from "../core/config.ts";
+import { dataDir } from "../core/paths.ts";
 import { controlSocketPath } from "../core/browser.ts";
 import { connectDaemon } from "../daemon/lifecycle.ts";
 
@@ -109,6 +110,18 @@ export async function runDoctorCli(): Promise<{ healthy: boolean; probes: Probe[
     }
 
     probes.push({ name: "adapters", status: "ok", detail: d.adapters.length ? d.adapters.join(", ") : "none discovered (fine if the app has no TanStack/jotai store)" });
+
+    // Project adapter file: present-but-silent is the broken-file signature
+    // (init scripts fail in isolation, so a syntax error shows up ONLY here).
+    const adapterFile = join(await dataDir(), "adapter.js");
+    if (existsSync(adapterFile)) {
+      const custom = d.adapters.filter((n) => n !== "queries" && n !== "jotai");
+      probes.push(
+        custom.length
+          ? { name: "project-adapter", status: "ok", detail: `adapter.js loaded — registered: ${custom.join(", ")}` }
+          : { name: "project-adapter", status: "warn", detail: "adapter.js present but nothing registered", hint: "likely a syntax error or register() never ran — check the browser console" }
+      );
+    }
     return finalize(probes);
   } finally {
     client.close();

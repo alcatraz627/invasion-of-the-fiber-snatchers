@@ -9,6 +9,7 @@ import net from "node:net";
 import type { Page } from "playwright";
 import { openPersistent, v2PidFile, v2SocketPath } from "../core/browser.ts";
 import { requireConfig } from "../core/config.ts";
+import { dataDir } from "../core/paths.ts";
 import { startFrameServer } from "../protocol/frames.ts";
 import type { DigestDelta, PushEvent, Request, Response } from "../protocol/types.ts";
 import { lookupAction, listActions } from "../actions/registry.ts";
@@ -179,6 +180,25 @@ async function buildRuntimeBundle(): Promise<string> {
   return await out.text();
 }
 
+// A generous ceiling for a dev-tool config script; anything bigger is almost
+// certainly a bundle landing in the wrong place, and injecting it on every
+// document would tax each page load.
+const PROJECT_ADAPTER_MAX_BYTES = 512 * 1024;
+
+async function loadProjectAdapterScript(): Promise<string | null> {
+  const file = join(await dataDir(), "adapter.js");
+  try {
+    const stat = await fs.stat(file);
+    if (stat.size > PROJECT_ADAPTER_MAX_BYTES) {
+      console.error(`project adapter ignored: ${file} is ${stat.size} bytes (cap ${PROJECT_ADAPTER_MAX_BYTES})`);
+      return null;
+    }
+    return await fs.readFile(file, "utf8");
+  } catch {
+    return null; // no adapter.js — the common case
+  }
+}
+
 async function main() {
   const cwd = spawnCwd();
   if (cwd) process.chdir(cwd);
@@ -208,6 +228,13 @@ async function main() {
   // config can't inject markup or hand the page a hostile value.
   await context.addInitScript(`window.__fsAdapt=${JSON.stringify(sanitizeAdapt(cfg.adapt))};`);
   await context.addInitScript(runtimeBundle);
+  // A project's own adapter script (`.fiber-snatcher/adapter.js`) runs after the
+  // runtime bundle on every new document, so its window.__fs.register() calls
+  // survive reloads for free. Init scripts fail in isolation: a broken file
+  // cannot take the page down — it just never registers, and doctor's
+  // project-adapter probe says so.
+  const projectAdapter = await loadProjectAdapterScript();
+  if (projectAdapter) await context.addInitScript(projectAdapter);
 
   // The rolling screencast is attached now but stays OFF until a `profile debug`
   // or a `record` turns it on — capture has a memory/CPU cost we don't pay by

@@ -32,11 +32,12 @@ export type Target = {
   stop: () => Promise<void>;
 };
 
-export async function startTarget(opts?: { adapt?: unknown }): Promise<Target> {
+export async function startTarget(opts?: { adapt?: unknown; adapterJs?: string }): Promise<Target> {
   const fixture = await startFixture();
   const dir = mkdtempSync(join(tmpdir(), "fs-e2e-"));
   const dd = join(dir, ".fiber-snatcher");
   mkdirSync(dd, { recursive: true });
+  if (opts?.adapterJs !== undefined) writeFileSync(join(dd, "adapter.js"), opts.adapterJs);
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fs-e2e-target" }));
   writeFileSync(
     join(dd, "config.json"),
