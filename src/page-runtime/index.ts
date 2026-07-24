@@ -15,7 +15,14 @@ type Fiber = {
   stateNode?: unknown;
 };
 
-type Adapter = { getState: () => unknown; dispatch: (action: unknown) => unknown };
+type Adapter = {
+  getState: () => unknown;
+  dispatch: (action: unknown) => unknown;
+  /** Optional live-work signal — {pending, started(monotonic)}. Sources with
+   *  one feed the settle loop, so `--settled` stays honest on apps whose async
+   *  work is not TanStack (a project adapter's fetchers, a router's loaders). */
+  activity?: () => { pending: number; started: number };
+};
 
 type Observation =
   | { kind: "error"; body: string; ts: number }
@@ -567,11 +574,12 @@ function armRemountSentinel(): void {
 
 function buildRuntime() {
   const adapters = new Map<string, Adapter>();
-  // Set when the tanstack adapter is discovered: reads live pending count plus a
-  // monotonic fetch-start counter (see makeTanstackAdapter). The counter lets a
-  // debounced query that fires AND resolves between two settle polls still be
-  // detected — an idle-only read would miss it (the debounce hole WP2 closes).
-  let tanstackActivity: (() => { pending: number; started: number }) | null = null;
+  // Live-work sources feeding the settle signal, keyed by adapter name. Each
+  // reads {pending, started}: the monotonic counter lets work that starts AND
+  // finishes between two settle polls still be detected — an idle-only read
+  // would miss it (the debounce hole WP2 closes). TanStack joins on discovery;
+  // project adapters join via register() when they carry an `activity` field.
+  const activitySources = new Map<string, () => { pending: number; started: number }>();
   const observations: Observation[] = [];
   const MAX_OBS = 1000;
   let refSeq = 0;
@@ -663,7 +671,7 @@ function buildRuntime() {
         if (c && typeof c.getQueryCache === "function") {
           const t = makeTanstackAdapter(c as never);
           adapters.set("queries", t.adapter);
-          tanstackActivity = t.activity;
+          activitySources.set("queries", t.activity);
           needQueries = false;
         }
       }
@@ -884,27 +892,35 @@ function buildRuntime() {
 
     register(name: string, adapter: Adapter) {
       adapters.set(name, adapter);
+      if (typeof adapter.activity === "function") activitySources.set(name, adapter.activity);
     },
 
     queriesPending(): number {
       discoverAdapters();
-      const a = adapters.get("queries");
-      if (!a) return 0;
-      try {
-        const list = a.getState() as Array<{ fetchStatus: string }>;
-        return list.filter((q) => q.fetchStatus === "fetching").length;
-      } catch {
-        return 0;
+      let pending = 0;
+      for (const read of activitySources.values()) {
+        try { pending += read().pending; } catch { /* a transient source failure reads as idle */ }
       }
+      return pending;
     },
 
-    /** Live pending count plus a monotonic count of fetch-starts since injection.
-     *  `started` is the "did a query fire?" read the debounce-aware settle needs:
-     *  comparing it against a baseline catches a query that ran entirely inside a
-     *  poll gap, which `queriesPending` (a point-in-time read) cannot see. */
+    /** Live pending count plus a monotonic count of work-starts since injection,
+     *  summed across every activity source. `started` is the "did work fire?"
+     *  read the debounce-aware settle needs: comparing it against a baseline
+     *  catches work that ran entirely inside a poll gap, which `queriesPending`
+     *  (a point-in-time read) cannot see. */
     queriesActivity(): { pending: number; started: number } {
       discoverAdapters();
-      return tanstackActivity ? tanstackActivity() : { pending: 0, started: 0 };
+      let pending = 0;
+      let started = 0;
+      for (const read of activitySources.values()) {
+        try {
+          const a = read();
+          pending += a.pending;
+          started += a.started;
+        } catch { /* a transient source failure reads as idle */ }
+      }
+      return { pending, started };
     },
 
     /** Digest source. mutations/errors/route reset each call (deltas); surfaces/
