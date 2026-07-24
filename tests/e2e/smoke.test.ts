@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startFixture } from "../fixture-app/serve.ts";
+import { RUNTIME_VERSION } from "../../src/page-runtime/version.ts";
 
 const FS_BIN = new URL("../../bin/fs.ts", import.meta.url).pathname;
 
@@ -116,7 +117,9 @@ describe("WP0 cold start", () => {
   test("cold start: one command from dead daemon answers with runtime injected", async () => {
     const res = await fs("info");
     expect(res.ok).toBe(true);
-    expect(res.data.runtimeVersion).toBe("2.0.0");
+    // Compare against the source constant, not a literal: this asserts the PAGE
+    // got the daemon's runtime injected, and stops going stale on version bumps.
+    expect(res.data.runtimeVersion).toBe(RUNTIME_VERSION);
     expect(res.data.url).toContain("localhost");
     await waitForParts(); // let the boot query land before the acceptance tests
   }, 30_000);
