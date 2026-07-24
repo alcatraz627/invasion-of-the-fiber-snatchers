@@ -48,13 +48,24 @@ export const routeActions: ActionDef<never>[] = [
     target: "none",
     observation: true,
     settle: false,
-    async run() {
+    async run(ctx) {
       const root = await resolveTargetRoot();
-      const appDir = [join(root, "src", "app"), join(root, "app")].find(existsSync);
+      const appDir = [join(root, "src", "app"), join(root, "app")].find((d) => existsSync(join(d, "layout.tsx")) || existsSync(join(d, "layout.js")) || existsSync(join(d, "page.tsx")) || existsSync(join(d, "page.js")));
       if (!appDir) {
+        // Not a Next App Router tree — ask the live page: a React Router data
+        // router knows its own route table, no source parsing needed.
+        const live = await ctx.runtime<string[]>("routerRoutes").catch(() => [] as string[]);
+        if (live.length) {
+          return {
+            router: "react-router",
+            count: live.length,
+            routes: live,
+            dynamic: live.filter((p) => p.includes(":")),
+          };
+        }
         return {
           router: "none",
-          detail: "no src/app or app directory — non-Next target or Pages Router (not yet supported)",
+          detail: "no Next App Router tree and no live data router — Pages Router is not supported",
           routes: [] as string[],
         };
       }

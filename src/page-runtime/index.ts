@@ -677,6 +677,16 @@ function buildRuntime() {
   // root during hydration, not per-route); a reload resets it via a fresh runtime.
   const MAX_DISCOVERY_TRIES = 8;
   function discoverAdapters(): string[] {
+    // React Router's data router is a plain window global in dev builds — an
+    // O(1) read, so it sits outside the fiber-walk try cap.
+    if (!adapters.has("router")) {
+      const r = (window as unknown as { __reactRouterDataRouter?: RR7Router }).__reactRouterDataRouter;
+      if (r && typeof r.subscribe === "function" && r.state?.navigation) {
+        const t = makeRouterAdapter(r);
+        adapters.set("router", t.adapter);
+        activitySources.set("router", t.activity);
+      }
+    }
     let needQueries = !adapters.has("queries");
     let needJotai = !adapters.has("jotai");
     if ((!needQueries && !needJotai) || discoveryTries >= MAX_DISCOVERY_TRIES) return [...adapters.keys()];
@@ -910,7 +920,7 @@ function buildRuntime() {
       // Built-in discovery owns these names. A project adapter grabbing one
       // registers before React hydrates, so discovery would see the name taken
       // and silently never wire the real integration — dispatch AND settle.
-      if (name === "queries" || name === "jotai") {
+      if (name === "queries" || name === "jotai" || name === "router") {
         throw new Error(`adapter name "${name}" is reserved for built-in discovery — pick another name`);
       }
       adapters.set(name, adapter);
@@ -956,6 +966,24 @@ function buildRuntime() {
     /** Names of adapters whose activity() threw on its latest read — surfaced
      *  by doctor so a broken settle feed is loud instead of vacuously idle. */
     activityBroken: () => [...activityBroken],
+
+    /** The live router's route tree as URL paths, for the `routes` verb on
+     *  non-Next apps — the runtime truth, no source parsing. */
+    routerRoutes(): string[] {
+      discoverAdapters();
+      const r = (window as unknown as { __reactRouterDataRouter?: RR7Router }).__reactRouterDataRouter;
+      if (!r?.routes) return [];
+      const out: string[] = [];
+      const walk = (routes: Array<{ path?: string; index?: boolean; children?: unknown[] }>, base: string): void => {
+        for (const rt of routes) {
+          const full = rt.path ? `${base}/${rt.path}`.replace(/\/+/g, "/") : base || "/";
+          if (rt.index || rt.path) out.push(rt.index ? (base || "/") : full);
+          if (Array.isArray(rt.children)) walk(rt.children as never, rt.path ? full : base);
+        }
+      };
+      walk(r.routes, "");
+      return [...new Set(out)];
+    },
 
     /** Digest source. mutations/errors/route reset each call (deltas); surfaces/
      *  focus/counts are absolute current-state reads the pipeline diffs against a
@@ -1013,6 +1041,97 @@ function buildRuntime() {
   };
 
   return api;
+}
+
+type RR7Router = {
+  state: {
+    location: { pathname: string; search: string };
+    navigation: { state: string };
+    fetchers: Map<string, { state: string }>;
+    matches?: Array<{ pathname?: string; route?: { id?: string; path?: string } }>;
+    loaderData?: Record<string, unknown>;
+  };
+  routes?: Array<{ path?: string; index?: boolean; children?: unknown[] }>;
+  subscribe: (fn: (s: RR7Router["state"]) => void) => () => void;
+  navigate: (to: string) => unknown;
+  revalidate?: () => unknown;
+};
+
+/** React Router data-router adapter (framework/dev builds expose the router at
+ *  window.__reactRouterDataRouter). Navigation + fetcher activity feed settle
+ *  the way TanStack fetches do, so `--settled` means "loaders and actions are
+ *  actually done" — the framework signal a generic driver can't produce. */
+function makeRouterAdapter(router: RR7Router): { adapter: Adapter; activity: () => { pending: number; started: number } } {
+  let started = 0;
+  let wasBusy = false;
+  // A fetcher orphaned by a hot-reload remount can sit non-idle forever; one
+  // whose state hasn't changed in ORPHAN_MS stops counting toward pending
+  // (still visible via getState) so HMR debris can't jam settle.
+  const ORPHAN_MS = 30_000;
+  const fetcherSeen = new Map<string, { state: string; ts: number }>();
+
+  const busyCount = (s: RR7Router["state"]): number => {
+    let n = s.navigation.state !== "idle" ? 1 : 0;
+    const now = Date.now();
+    for (const [key, f] of s.fetchers) {
+      if (f.state === "idle") {
+        fetcherSeen.delete(key);
+        continue;
+      }
+      const seen = fetcherSeen.get(key);
+      if (!seen || seen.state !== f.state) {
+        fetcherSeen.set(key, { state: f.state, ts: now });
+        n++;
+      } else if (now - seen.ts < ORPHAN_MS) {
+        n++;
+      }
+    }
+    return n;
+  };
+
+  // The subscription's only job is the monotonic started counter: an aggregate
+  // idle→busy edge counts once, so work that begins AND ends inside a settle
+  // poll gap is still seen. Overlapping bursts collapse into one edge, which
+  // is fine — pending covers everything longer than a gap.
+  try {
+    router.subscribe((s) => {
+      const busy = busyCount(s) > 0;
+      if (busy && !wasBusy) started++;
+      wasBusy = busy;
+    });
+  } catch { /* without subscribe, point-in-time pending still works */ }
+
+  const snapshot = () => {
+    const s = router.state;
+    return {
+      location: s.location.pathname + s.location.search,
+      navigation: s.navigation.state,
+      fetchers: [...s.fetchers].map(([key, f]) => ({ key, state: f.state })),
+      matches: (s.matches ?? []).map((m) => m.route?.path ?? m.pathname ?? m.route?.id).filter(Boolean),
+      loaderData: s.loaderData ?? {},
+    };
+  };
+
+  return {
+    adapter: {
+      getState: snapshot,
+      dispatch(action: unknown) {
+        const a = action as { op?: string; to?: string };
+        const op = a?.op ?? "list";
+        switch (op) {
+          case "list": return snapshot();
+          case "navigate":
+            if (!a.to) throw new Error("router dispatch: `to` required for op=navigate");
+            return Promise.resolve(router.navigate(a.to)).then(() => ({ ok: true, to: a.to }));
+          case "revalidate":
+            if (typeof router.revalidate !== "function") throw new Error("router dispatch: this router has no revalidate()");
+            return Promise.resolve(router.revalidate()).then(() => ({ ok: true, op }));
+          default: throw new Error(`router dispatch: unknown op ${op} (ops: list, navigate, revalidate)`);
+        }
+      },
+    },
+    activity: () => ({ pending: busyCount(router.state), started }),
+  };
 }
 
 function makeTanstackAdapter(client: {

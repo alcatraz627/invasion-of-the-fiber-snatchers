@@ -83,6 +83,50 @@ function Modal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** A hand-rolled stand-in for React Router's dev-exposed data router, matching
+ *  the shape contract the built-in router adapter reads (subscribe, navigate,
+ *  state.navigation/fetchers, routes). Fake navigations hold a 600ms busy
+ *  window so e2e can exercise settle + dispatch without a router dependency. */
+function installFakeRouter() {
+  const w = window as unknown as { __reactRouterDataRouter?: unknown };
+  if (w.__reactRouterDataRouter) return;
+  const listeners: Array<(s: unknown) => void> = [];
+  const state = {
+    location: { pathname: "/", search: "" },
+    navigation: { state: "idle" },
+    fetchers: new Map<string, { state: string }>(),
+    matches: [] as unknown[],
+    loaderData: { root: { seeded: true } },
+  };
+  const notify = () => listeners.forEach((l) => l(state));
+  w.__reactRouterDataRouter = {
+    state,
+    routes: [{ path: "/", children: [{ path: "parts" }, { path: "parts/:id" }] }],
+    subscribe(fn: (s: unknown) => void) {
+      listeners.push(fn);
+      return () => {};
+    },
+    navigate(to: string) {
+      state.navigation = { state: "loading" };
+      notify();
+      setTimeout(() => {
+        state.location = { pathname: String(to), search: "" };
+        state.navigation = { state: "idle" };
+        notify();
+      }, 600);
+    },
+    revalidate() {
+      state.navigation = { state: "loading" };
+      notify();
+      setTimeout(() => {
+        state.navigation = { state: "idle" };
+        notify();
+      }, 400);
+    },
+  };
+}
+installFakeRouter();
+
 /** Native <dialog> surface: opened via showModal(), no role attribute — the
  *  implicit-ARIA case the surface digest must still track (the versable kit's
  *  modal pattern). The shell stays mounted while closed. */
