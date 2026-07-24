@@ -130,7 +130,7 @@ export async function runDoctorCli(): Promise<{ healthy: boolean; probes: Probe[
     // (init scripts fail in isolation, so a syntax error shows up ONLY here).
     const adapterFile = join(await dataDir(), "adapter.js");
     if (existsSync(adapterFile)) {
-      const custom = d.adapters.filter((n) => n !== "queries" && n !== "jotai");
+      const custom = d.adapters.filter((n) => n !== "queries" && n !== "jotai" && n !== "router");
       probes.push(
         custom.length
           ? { name: "project-adapter", status: "ok", detail: `adapter.js loaded — registered: ${custom.join(", ")}` }
