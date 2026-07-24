@@ -32,6 +32,7 @@ beforeAll(async () => {
     mkdirSync(join(p, ".."), { recursive: true });
     writeFileSync(p, "export default function P(){return null}");
   };
+  write("layout.tsx"); // the mandatory root layout is the Next-vs-RR7 discriminator
   write("page.tsx");
   write("jobs/page.tsx");
   write("jobs/[jobId]/page.tsx");

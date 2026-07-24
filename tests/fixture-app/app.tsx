@@ -101,6 +101,7 @@ function installFakeRouter() {
   const notify = () => listeners.forEach((l) => l(state));
   w.__reactRouterDataRouter = {
     state,
+    _notify: notify,
     routes: [{ path: "/", children: [{ path: "parts" }, { path: "parts/:id" }] }],
     subscribe(fn: (s: unknown) => void) {
       listeners.push(fn);

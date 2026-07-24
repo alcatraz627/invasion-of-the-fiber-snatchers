@@ -102,6 +102,9 @@ describe("project adapter injection + generalized activity", () => {
  *  degrade loudly (rejected, read as idle, named by doctor) — never silently. */
 const HOSTILE_ADAPTER = `
 (() => {
+  // A router global whose state getter throws must not blind the rest of
+  // discovery (TanStack/jotai live in the same walk).
+  window.__reactRouterDataRouter = { get state() { throw new Error("hostile"); }, subscribe: () => () => {}, navigate: () => {} };
   const tryReg = () => {
     const fs = window.__fs;
     if (!fs || typeof fs.register !== "function") return false;
@@ -158,6 +161,10 @@ describe("hostile project adapters (gate findings)", () => {
     const act = probes.find((p) => p.name === "activity");
     expect(act?.status).toBe("warn");
     expect(act?.detail ?? "").toContain("thrower");
+    // The hostile router global (throwing state getter) must not have blinded
+    // the fiber-walk half of discovery.
+    const adaptersProbe = probes.find((p) => p.name === "adapters");
+    expect(adaptersProbe?.detail ?? "").toContain("queries");
   });
 });
 

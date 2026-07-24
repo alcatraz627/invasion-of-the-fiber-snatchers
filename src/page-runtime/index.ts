@@ -588,6 +588,9 @@ function buildRuntime() {
   // idle — one broken adapter must not jam every wait on the page — but silent
   // idleness is a vacuous settle nobody can see, so doctor names these.
   const activityBroken = new Set<string>();
+  // The router instance the "router" adapter is currently bound to; a mismatch
+  // against the live window global means hot-reload replaced it — re-bind.
+  let boundRouter: RR7Router | null = null;
   // Project adapters return arbitrary shapes; summed raw, a NaN pending jams
   // every settle wait forever (NaN === 0 is never true), a string "0" turns the
   // sum into string concat, and a negative sum never reaches zero. Count only
@@ -678,15 +681,21 @@ function buildRuntime() {
   const MAX_DISCOVERY_TRIES = 8;
   function discoverAdapters(): string[] {
     // React Router's data router is a plain window global in dev builds — an
-    // O(1) read, so it sits outside the fiber-walk try cap.
-    if (!adapters.has("router")) {
+    // O(1) read, so it sits outside the fiber-walk try cap. Checked EVERY call
+    // by identity: hot-reload can swap the global's router instance without a
+    // document reload, and an adapter bound to the dead one would report false
+    // navigation success and hide live loader activity from settle. The whole
+    // branch is guarded — a hostile global (a throwing state getter) must not
+    // abort the TanStack/jotai discovery below it.
+    try {
       const r = (window as unknown as { __reactRouterDataRouter?: RR7Router }).__reactRouterDataRouter;
-      if (r && typeof r.subscribe === "function" && r.state?.navigation) {
+      if (r && r !== boundRouter && typeof r.subscribe === "function" && r.state?.navigation) {
         const t = makeRouterAdapter(r);
         adapters.set("router", t.adapter);
         activitySources.set("router", t.activity);
+        boundRouter = r;
       }
-    }
+    } catch { /* not a usable router; fiber-walk discovery proceeds */ }
     let needQueries = !adapters.has("queries");
     let needJotai = !adapters.has("jotai");
     if ((!needQueries && !needJotai) || discoveryTries >= MAX_DISCOVERY_TRIES) return [...adapters.keys()];
@@ -974,14 +983,20 @@ function buildRuntime() {
       const r = (window as unknown as { __reactRouterDataRouter?: RR7Router }).__reactRouterDataRouter;
       if (!r?.routes) return [];
       const out: string[] = [];
-      const walk = (routes: Array<{ path?: string; index?: boolean; children?: unknown[] }>, base: string): void => {
+      // A malformed table can self-reference; the visited set and depth cap
+      // turn that into a truncated list instead of a stack overflow.
+      const visited = new Set<unknown>();
+      const walk = (routes: Array<{ path?: string; index?: boolean; children?: unknown[] }>, base: string, depth: number): void => {
+        if (depth > 16) return;
         for (const rt of routes) {
+          if (visited.has(rt)) continue;
+          visited.add(rt);
           const full = rt.path ? `${base}/${rt.path}`.replace(/\/+/g, "/") : base || "/";
           if (rt.index || rt.path) out.push(rt.index ? (base || "/") : full);
-          if (Array.isArray(rt.children)) walk(rt.children as never, rt.path ? full : base);
+          if (Array.isArray(rt.children)) walk(rt.children as never, rt.path ? full : base, depth + 1);
         }
       };
-      walk(r.routes, "");
+      walk(r.routes, "", 0);
       return [...new Set(out)];
     },
 
@@ -1064,25 +1079,31 @@ type RR7Router = {
 function makeRouterAdapter(router: RR7Router): { adapter: Adapter; activity: () => { pending: number; started: number } } {
   let started = 0;
   let wasBusy = false;
-  // A fetcher orphaned by a hot-reload remount can sit non-idle forever; one
-  // whose state hasn't changed in ORPHAN_MS stops counting toward pending
-  // (still visible via getState) so HMR debris can't jam settle.
+  // A fetcher can sit non-idle forever after a hot-reload remount orphans its
+  // completion. One is excluded from pending only when BOTH hold: its state
+  // hasn't changed in ORPHAN_MS, AND a remount happened since it was first
+  // seen — so a genuinely slow action (a 45s upload, no remount) keeps
+  // blocking settle honestly. Excluded fetchers stay visible in getState.
   const ORPHAN_MS = 30_000;
-  const fetcherSeen = new Map<string, { state: string; ts: number }>();
+  const remountsNow = (): number => window.__fsRemount?.count ?? 0;
+  const fetcherSeen = new Map<string, { state: string; ts: number; remounts: number }>();
 
   const busyCount = (s: RR7Router["state"]): number => {
     let n = s.navigation.state !== "idle" ? 1 : 0;
     const now = Date.now();
-    for (const [key, f] of s.fetchers) {
+    // Tolerate non-Map fetchers (some router builds carry a plain object).
+    const entries: Iterable<[string, { state: string }]> =
+      s.fetchers instanceof Map ? s.fetchers : Object.entries(s.fetchers ?? {});
+    for (const [key, f] of entries) {
       if (f.state === "idle") {
         fetcherSeen.delete(key);
         continue;
       }
       const seen = fetcherSeen.get(key);
       if (!seen || seen.state !== f.state) {
-        fetcherSeen.set(key, { state: f.state, ts: now });
+        fetcherSeen.set(key, { state: f.state, ts: now, remounts: remountsNow() });
         n++;
-      } else if (now - seen.ts < ORPHAN_MS) {
+      } else if (now - seen.ts < ORPHAN_MS || remountsNow() <= seen.remounts) {
         n++;
       }
     }
@@ -1092,12 +1113,16 @@ function makeRouterAdapter(router: RR7Router): { adapter: Adapter; activity: () 
   // The subscription's only job is the monotonic started counter: an aggregate
   // idle→busy edge counts once, so work that begins AND ends inside a settle
   // poll gap is still seen. Overlapping bursts collapse into one edge, which
-  // is fine — pending covers everything longer than a gap.
+  // is fine — pending covers everything longer than a gap. The callback body
+  // is guarded: a throw here would propagate into the ROUTER's own notify
+  // loop and could abort its sibling listeners mid-transition.
   try {
     router.subscribe((s) => {
-      const busy = busyCount(s) > 0;
-      if (busy && !wasBusy) started++;
-      wasBusy = busy;
+      try {
+        const busy = busyCount(s) > 0;
+        if (busy && !wasBusy) started++;
+        wasBusy = busy;
+      } catch { /* never disturb the router's notify loop */ }
     });
   } catch { /* without subscribe, point-in-time pending still works */ }
 

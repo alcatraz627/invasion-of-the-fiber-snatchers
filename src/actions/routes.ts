@@ -50,7 +50,11 @@ export const routeActions: ActionDef<never>[] = [
     settle: false,
     async run(ctx) {
       const root = await resolveTargetRoot();
-      const appDir = [join(root, "src", "app"), join(root, "app")].find((d) => existsSync(join(d, "layout.tsx")) || existsSync(join(d, "layout.js")) || existsSync(join(d, "page.tsx")) || existsSync(join(d, "page.js")));
+      // A root layout is MANDATORY in Next's App Router, and React Router
+      // framework apps also ship an app/ dir — the layout file is the only
+      // reliable discriminator (a lone page.tsx can appear in either).
+      const appDir = [join(root, "src", "app"), join(root, "app")].find((d) =>
+        ["layout.tsx", "layout.jsx", "layout.js", "layout.ts"].some((f) => existsSync(join(d, f))));
       if (!appDir) {
         // Not a Next App Router tree — ask the live page: a React Router data
         // router knows its own route table, no source parsing needed.

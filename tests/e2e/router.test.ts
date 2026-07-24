@@ -52,4 +52,30 @@ describe("react-router adapter", () => {
     expect(res.ok).toBe(true);
     expect(res.digest?.queries).toBe("settled");
   });
+
+  test("started counter sees a busy cycle that begins and ends between polls", async () => {
+    // Drive a full loading→idle cycle synchronously through the fake's notify —
+    // by construction inside one poll gap, so only the subscription's edge
+    // counter can have seen it. A point-in-time pending read never will.
+    const before = await t.fs("eval", "window.__fs.queriesActivity().started");
+    const blip = await t.fs(
+      "eval",
+      "(() => { const r = window.__reactRouterDataRouter; r.state.navigation = { state: 'loading' }; r._notify(); r.state.navigation = { state: 'idle' }; r._notify(); return true; })()"
+    );
+    expect(blip.ok).toBe(true);
+    const after = await t.fs("eval", "window.__fs.queriesActivity().started");
+    expect(Number(after.data)).toBeGreaterThan(Number(before.data));
+  });
+
+  // Keep this LAST: it replaces the page's router global for the target's life.
+  test("a hot-swapped router global is re-bound on the next call", async () => {
+    const swap = await t.fs(
+      "eval",
+      "(() => { window.__reactRouterDataRouter = { state: { location: { pathname: '/swapped', search: '' }, navigation: { state: 'idle' }, fetchers: new Map(), matches: [], loaderData: {} }, routes: [], subscribe: () => () => {}, navigate: () => {} }; return true; })()"
+    );
+    expect(swap.ok).toBe(true);
+    const res = await t.fs("dispatch", "--adapter", "router", '{"op":"list"}');
+    expect(res.ok).toBe(true);
+    expect(res.data?.location).toBe("/swapped");
+  });
 });
