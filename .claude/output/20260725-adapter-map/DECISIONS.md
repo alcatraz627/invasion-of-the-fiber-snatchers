@@ -23,4 +23,9 @@ Decisions made with you away, for later review. Flip any of these and I'll rewor
 
 15. **Gate verdict ISSUES-FOUND, all dispositioned (commit e4a0eff):** reserved adapter names (`queries`/`jotai` now rejected by `register()`), activity reads coerced+clamped, throwing sources named by a doctor warn. Full report + dispositions: `.claude/output/20260725-bloop1-validation/report.md`. Two accepted-no-action items you may want to eyeball: the runtimeVersion pin is structurally tautological (guards injection failure only), and a source claiming an absurd-but-finite pending count is honored as in-flight (can't distinguish honest from buggy).
 
+16. **Speedway live drive was strictly read-only in your real workspace:** logged in with the dev creds via fs verbs (hands-free), drove modules / New Job modal (`?new=1`, opened + dismissed) / Jobs / Review pages. Jobs list is empty ("Jobs 0") so jobs→detail is UNCONFIRMED on real data — I did not create a job (no mutations in your workspace); vb-fable can exercise it and task me.
+17. **Orphan-fetcher exclusion (30s window) ships without a hermetic test** — the window is impractical to induce per-file; the logic went to the gate for adversarial reading instead. An injectable-clock knob is the fix if you want it pinned.
+
+18. **Bloop 2 gate ISSUES-FOUND, all six findings fixed same-pass (commit 5270553):** hostile-global guard, HMR re-bind by identity, guarded subscribe callback, remount-gated orphan exclusion (no config knob — the remount signal replaces it), layout-only Next discriminator, cycle-capped route walk, plus the started-counter coverage gap closed. Report: `.claude/output/20260725-bloop2-validation/report.md`. Residuals held honestly UNCONFIRMED: real-RR7 notify-wrap behavior; hermetic orphan test; jobs→detail on real data (vb-fable's battery).
+
 _Appended as further decisions land._
