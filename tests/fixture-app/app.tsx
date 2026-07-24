@@ -83,6 +83,22 @@ function Modal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Native <dialog> surface: opened via showModal(), no role attribute — the
+ *  implicit-ARIA case the surface digest must still track (the versable kit's
+ *  modal pattern). The shell stays mounted while closed. */
+function NativeDialog() {
+  const ref = useRef<HTMLDialogElement | null>(null);
+  return (
+    <div>
+      <button onClick={() => ref.current?.showModal()}>Open native dialog</button>
+      <dialog ref={ref} id="native-dialog">
+        <h2>Native Dialog</h2>
+        <button onClick={() => ref.current?.close()}>Dismiss native</button>
+      </dialog>
+    </div>
+  );
+}
+
 /** WP3a hover trap: a card that opens on pointer-enter and must STAY open while
  *  the pointer rests. The wrapper owns enter/leave and the card renders BELOW the
  *  trigger (never over it), so resting on the button doesn't fire mouseleave —
@@ -550,6 +566,7 @@ function App() {
       )}
       {/* WP3a pointer/keyboard/scroll traps (always mounted, so always discoverable) */}
       <HoverPopover />
+      <NativeDialog />
       <ContextZone />
       <DndList />
       <PointerDndList />

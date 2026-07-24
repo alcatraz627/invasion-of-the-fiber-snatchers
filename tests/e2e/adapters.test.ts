@@ -97,6 +97,27 @@ describe("project adapter injection + generalized activity", () => {
   });
 });
 
+describe("native <dialog> surfaces", () => {
+  let t: Target;
+  beforeAll(async () => {
+    t = await startTarget();
+    await t.fs("navigate", "/");
+    await t.fs("wait", "--settled");
+  });
+  afterAll(async () => {
+    await t.stop();
+  });
+
+  test("showModal()/close() surface deltas are digested with the dialog: kind", async () => {
+    const opened = await t.fs("click", "Open native dialog");
+    expect(opened.ok).toBe(true);
+    expect(opened.digest?.surfaces?.opened ?? []).toContain("dialog:Native Dialog");
+    const closed = await t.fs("click", "Dismiss native");
+    expect(closed.ok).toBe(true);
+    expect(closed.digest?.surfaces?.closed ?? []).toContain("dialog:Native Dialog");
+  });
+});
+
 describe("broken project adapter file", () => {
   let t: Target;
   beforeAll(async () => {
