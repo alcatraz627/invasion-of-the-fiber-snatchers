@@ -28,4 +28,6 @@ Decisions made with you away, for later review. Flip any of these and I'll rewor
 
 18. **Bloop 2 gate ISSUES-FOUND, all six findings fixed same-pass (commit 5270553):** hostile-global guard, HMR re-bind by identity, guarded subscribe callback, remount-gated orphan exclusion (no config knob — the remount signal replaces it), layout-only Next discriminator, cycle-capped route walk, plus the started-counter coverage gap closed. Report: `.claude/output/20260725-bloop2-validation/report.md`. Residuals held honestly UNCONFIRMED: real-RR7 notify-wrap behavior; hermetic orphan test; jobs→detail on real data (vb-fable's battery).
 
+19. **vb-fable's battery verdict: "the adapter is genuinely good to drive."** Its two tool issues: hidden dropzone file inputs now listed+marked in `fs page` (fixed, pinned); the once-seen digest counts race is tracked with a repro request (journal seq) rather than blind-patched — no reproduction, and the drain's timing is exactly where a guessed fix would look right and be wrong. Mission's fix-loop converged; wake left armed to snooze itself on the next clean fire.
+
 _Appended as further decisions land._
