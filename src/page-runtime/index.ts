@@ -584,6 +584,18 @@ function buildRuntime() {
   // would miss it (the debounce hole WP2 closes). TanStack joins on discovery;
   // project adapters join via register() when they carry an `activity` field.
   const activitySources = new Map<string, () => { pending: number; started: number }>();
+  // Sources whose most recent activity() read threw. Settle math treats them as
+  // idle — one broken adapter must not jam every wait on the page — but silent
+  // idleness is a vacuous settle nobody can see, so doctor names these.
+  const activityBroken = new Set<string>();
+  // Project adapters return arbitrary shapes; summed raw, a NaN pending jams
+  // every settle wait forever (NaN === 0 is never true), a string "0" turns the
+  // sum into string concat, and a negative sum never reaches zero. Count only
+  // finite positives; everything else reads as idle.
+  const normCount = (v: unknown): number => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
   const observations: Observation[] = [];
   const MAX_OBS = 1000;
   let refSeq = 0;
@@ -895,6 +907,12 @@ function buildRuntime() {
     },
 
     register(name: string, adapter: Adapter) {
+      // Built-in discovery owns these names. A project adapter grabbing one
+      // registers before React hydrates, so discovery would see the name taken
+      // and silently never wire the real integration — dispatch AND settle.
+      if (name === "queries" || name === "jotai") {
+        throw new Error(`adapter name "${name}" is reserved for built-in discovery — pick another name`);
+      }
       adapters.set(name, adapter);
       if (typeof adapter.activity === "function") activitySources.set(name, adapter.activity);
     },
@@ -902,8 +920,13 @@ function buildRuntime() {
     queriesPending(): number {
       discoverAdapters();
       let pending = 0;
-      for (const read of activitySources.values()) {
-        try { pending += read().pending; } catch { /* a transient source failure reads as idle */ }
+      for (const [name, read] of activitySources) {
+        try {
+          pending += normCount(read().pending);
+          activityBroken.delete(name);
+        } catch {
+          activityBroken.add(name);
+        }
       }
       return pending;
     },
@@ -917,15 +940,22 @@ function buildRuntime() {
       discoverAdapters();
       let pending = 0;
       let started = 0;
-      for (const read of activitySources.values()) {
+      for (const [name, read] of activitySources) {
         try {
           const a = read();
-          pending += a.pending;
-          started += a.started;
-        } catch { /* a transient source failure reads as idle */ }
+          pending += normCount(a.pending);
+          started += normCount(a.started);
+          activityBroken.delete(name);
+        } catch {
+          activityBroken.add(name);
+        }
       }
       return { pending, started };
     },
+
+    /** Names of adapters whose activity() threw on its latest read — surfaced
+     *  by doctor so a broken settle feed is loud instead of vacuously idle. */
+    activityBroken: () => [...activityBroken],
 
     /** Digest source. mutations/errors/route reset each call (deltas); surfaces/
      *  focus/counts are absolute current-state reads the pipeline diffs against a

@@ -97,6 +97,70 @@ describe("project adapter injection + generalized activity", () => {
   });
 });
 
+/** A careless adapter file must not break the tool: grabbing a built-in name,
+ *  returning NaN/stringly activity counts, or throwing from activity() each
+ *  degrade loudly (rejected, read as idle, named by doctor) — never silently. */
+const HOSTILE_ADAPTER = `
+(() => {
+  const tryReg = () => {
+    const fs = window.__fs;
+    if (!fs || typeof fs.register !== "function") return false;
+    try { fs.register("queries", { getState: () => ({ hijacked: true }), dispatch: () => ({ hijacked: true }) }); } catch {}
+    fs.register("nanny", {
+      getState: () => ({}),
+      dispatch: () => ({ ok: true }),
+      activity: () => ({ pending: NaN, started: "0" }),
+    });
+    fs.register("thrower", {
+      getState: () => ({}),
+      dispatch: () => ({ ok: true }),
+      activity: () => { throw new Error("boom"); },
+    });
+    return true;
+  };
+  if (!tryReg()) {
+    let tries = 0;
+    const t = setInterval(() => { if (tryReg() || ++tries > 50) clearInterval(t); }, 100);
+  }
+})();
+`;
+
+describe("hostile project adapters (gate findings)", () => {
+  let t: Target;
+  beforeAll(async () => {
+    t = await startTarget({ adapterJs: HOSTILE_ADAPTER });
+    await t.fs("navigate", "/");
+  });
+  afterAll(async () => {
+    await t.stop();
+  });
+
+  test("reserved name 'queries' cannot be clobbered — TanStack stays reachable", async () => {
+    const res = await t.fs("dispatch", "--adapter", "queries", '{"op":"list"}');
+    expect(res.ok).toBe(true);
+    // The real TanStack snapshot is an array of queries, not the hijack object.
+    expect(Array.isArray(res.data)).toBe(true);
+  });
+
+  test("NaN/stringly activity cannot jam settle page-wide", async () => {
+    const t0 = Date.now();
+    const res = await t.fs("wait", "--settled", "--timeout", "5000");
+    const elapsed = Date.now() - t0;
+    expect(res.ok).toBe(true);
+    // A jammed aggregate (NaN never equals 0) burns the whole timeout; a
+    // healthy sum settles within the quiet grace.
+    expect(elapsed).toBeLessThan(3000);
+  });
+
+  test("a throwing activity() source is named by doctor", async () => {
+    const doctor = await t.fs("doctor");
+    const probes: Array<{ name: string; status: string; detail?: string }> = doctor.data?.probes ?? [];
+    const act = probes.find((p) => p.name === "activity");
+    expect(act?.status).toBe("warn");
+    expect(act?.detail ?? "").toContain("thrower");
+  });
+});
+
 describe("native <dialog> surfaces", () => {
   let t: Target;
   beforeAll(async () => {

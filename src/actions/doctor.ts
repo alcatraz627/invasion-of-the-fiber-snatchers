@@ -23,6 +23,7 @@ type DoctorPageProbe = {
   url: string;
   onErrorPage: boolean;
   adapters: string[];
+  activityBroken: string[];
 };
 
 export const doctorActions: ActionDef<never>[] = [
@@ -37,11 +38,13 @@ export const doctorActions: ActionDef<never>[] = [
       const onErrorPage = url.startsWith("chrome-error://") || url === "about:blank" || url === "";
       let pageRuntime: string | null = null;
       let adapters: string[] = [];
+      let activityBroken: string[] = [];
       if (!onErrorPage) {
         pageRuntime = await ctx.runtime<string>("version").catch(() => null);
         adapters = await ctx.runtime<string[]>("adapters").catch(() => []);
+        activityBroken = await ctx.runtime<string[]>("activityBroken").catch(() => []);
       }
-      return { daemonRuntime: RUNTIME_VERSION, pageRuntime, url, onErrorPage, adapters };
+      return { daemonRuntime: RUNTIME_VERSION, pageRuntime, url, onErrorPage, adapters, activityBroken };
     },
   } as ActionDef<never>,
 ];
@@ -110,6 +113,18 @@ export async function runDoctorCli(): Promise<{ healthy: boolean; probes: Probe[
     }
 
     probes.push({ name: "adapters", status: "ok", detail: d.adapters.length ? d.adapters.join(", ") : "none discovered (fine if the app has no TanStack/jotai store)" });
+
+    // A source whose activity() throws is counted idle by settle (one broken
+    // adapter must not jam the page), so this warn is the ONLY place a dead
+    // settle feed becomes visible.
+    if ((d.activityBroken ?? []).length) {
+      probes.push({
+        name: "activity",
+        status: "warn",
+        detail: `activity() throwing on: ${d.activityBroken.join(", ")} — settle treats these as idle`,
+        hint: "fix the adapter's activity() return; its work is invisible to --settled until then",
+      });
+    }
 
     // Project adapter file: present-but-silent is the broken-file signature
     // (init scripts fail in isolation, so a syntax error shows up ONLY here).
