@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ok, type Result } from "../core/result.ts";
 import { requireConfig } from "../core/config.ts";
-import { controlSocketPath } from "../core/browser.ts";
+import { controlSocketPath, v2DaemonPid, v2PidFile, v2SocketPath } from "../core/browser.ts";
 
 export async function run(args: string[]): Promise<Result> {
   const cfg = await requireConfig();
@@ -22,6 +22,18 @@ export async function run(args: string[]): Promise<Result> {
   if (existsSync(sock) && !existsSync(cfg.daemonPidFile)) {
     await fs.rm(sock, { force: true });
     removed.push("control.sock");
+  }
+
+  // Same sweep for V2 state: only ever remove what a dead daemon left behind.
+  const v2 = v2DaemonPid(cfg);
+  if (v2.state === "stale") {
+    await fs.rm(v2PidFile(cfg), { force: true });
+    removed.push("daemon-v2.pid (stale)");
+  }
+  const sock2 = v2SocketPath(cfg);
+  if (existsSync(sock2) && v2DaemonPid(cfg).state === "none") {
+    await fs.rm(sock2, { force: true });
+    removed.push("control-v2.sock");
   }
 
   // Tmp cleanup

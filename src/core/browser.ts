@@ -12,7 +12,7 @@
 
 import type { BrowserContext, Page } from "playwright";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { FsConfig } from "./config.ts";
 
@@ -57,4 +57,20 @@ export function v2SocketPath(cfg: FsConfig): string {
 
 export function v2PidFile(cfg: FsConfig): string {
   return join(cfg.profileDir, "..", "daemon-v2.pid");
+}
+
+/** The V2 daemon's liveness as its pidfile tells it: no pidfile, a stale one
+ *  (dead pid), or the live pid. Lets the V1 lifecycle verbs see V2 daemons
+ *  instead of reporting not-running while one holds the browser. */
+export function v2DaemonPid(cfg: FsConfig): { state: "none" | "stale" | "live"; pid?: number } {
+  const file = v2PidFile(cfg);
+  if (!existsSync(file)) return { state: "none" };
+  const pid = Number(readFileSync(file, "utf8").trim());
+  if (!Number.isFinite(pid) || pid <= 0) return { state: "stale", pid };
+  try {
+    process.kill(pid, 0);
+    return { state: "live", pid };
+  } catch {
+    return { state: "stale", pid };
+  }
 }
