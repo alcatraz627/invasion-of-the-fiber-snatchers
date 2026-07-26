@@ -24,6 +24,14 @@ Three sections, by what each asks of you. Detail for any entry on request.
 - vb-fable's once-seen digest counts race is tracked with a repro request (journal seq), not blind-patched.
 - Existing `.fiber-snatcher` configs were patched in place (stale `devUrl` fields → `:5104`/`:5101`) instead of `--force` re-init, preserving auth keys and profiles.
 
+## Round 2 (2026-07-27, your three approvals) — defaults chosen while executing
+
+- **Kit dev-handle shipped and verified** (versable-builder `e293d21`, local — vb-fable asked that kit publishing stay theirs via release.sh; agreed, I push nothing there). Verified on speedway: open and close drive the real store to rendered dialogs; URL-controlled modals (new-job with `?new=1`) are properly driven by URL instead — documented to vb-fable.
+- **NODE_ENV sweep rode along** (5 kit/toolkit files): `process.env?.NODE_ENV` defeats bundler static replacement, so every dev-only kit feature was silently off in client bundles. Same-class fix, flagged rather than silent.
+- **I broke and repaired the playground service:** its pm2 runs `next start` (production) — I mistook it for a dev server and deleted `.next` as a "cache", crash-looping it. Rebuilt with the new kit, serving 200. The wrongly-assumed-dev lesson is logged.
+- **Speedway dependency wiring handed to its owner** when my `pnpm install --force` materialized registry copies against their committed `^0.0.11` pin; vb-fable's `release.sh dev-link` was the known-good fix. Speedway healthy throughout.
+- **v2.1.0 tagged at its historical commit (9620d19), adapter round became v2.2.0** — tagging 2.1.0 on a head full of adapter work would have mislabeled it.
+
 ## Record only (verified working; no plausible disagreement)
 
 - Work on branch `v2-adapters` off `v2`; commits per logical unit; validation reports committed at `.claude/output/20260725-bloop1-validation/report.md` and `.claude/output/20260725-bloop2-validation/report.md`.
