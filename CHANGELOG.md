@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — branch `v2-adapters`
+## [2.2.0] — 2026-07-27
 
 ### Adapter round: project adapters, generalized settle, lifecycle fixes
 
@@ -15,13 +15,30 @@ Driven by enabling two non-TanStack Versable apps (playground, speedway). 190 te
   `wait --settled` and the per-verb drain (TanStack is now just source #1).
 - Native `<dialog>` is a first-class surface (`dialog[open]` in the selector,
   `dialog:<label>` keys) — implicit-ARIA modals digest like role=dialog ones.
+- Built-in React Router adapter: discovered from the dev build's
+  `window.__reactRouterDataRouter`, navigation + fetcher activity feeds
+  `--settled` (hot-reload-orphaned fetchers are remount-gated out), dispatch
+  `list`/`navigate`/`revalidate`, and `routes` answers from the live route
+  table on non-Next apps (the Next tree is now discriminated by its mandatory
+  root layout).
+- Hidden file inputs (the dropzone pattern) are listed in `fs page` with
+  `hidden: true`, so `upload` has a discoverable target.
 
-**Hardening (adversarial-gate findings):**
-- `register()` rejects the reserved names `queries`/`jotai` (clobber displaced the
-  real TanStack wiring and doctor's filter hid it).
+**Hardening (two adversarial-gate rounds, all findings fixed + pinned):**
+- `register()` rejects the reserved names `queries`/`jotai`/`router` (clobber
+  displaced the real TanStack wiring and doctor's filter hid it).
 - Activity reads coerced + clamped — a NaN/stringly/negative count from one
   adapter jammed every settle wait on the page forever.
 - Throwing `activity()` sources read as idle but are named by a doctor warn.
+- Router discovery is guarded and identity-rechecked: a throwing state getter
+  can't blind the rest of discovery, and a hot-swapped router global re-binds
+  instead of reporting false navigation success; the subscribe callback can't
+  throw into the router's own notify loop; cyclic route tables truncate.
+
+**Lifecycle:**
+- The frozen V1 CLI's `stop`/`status`/`clean` now see V2 daemons (`RUNNING_V2`,
+  clean SIGTERM stop, stale-file sweep) instead of reporting not-running while
+  one holds the browser.
 
 **Lifecycle fixes:**
 - `fs stop` waits for actual daemon death (the ack-then-race lost the next verb's
