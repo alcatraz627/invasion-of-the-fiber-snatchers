@@ -50,7 +50,7 @@ is a dead click, a real signal. Read the digest fields this way:
 | `mutations:none` | nothing changed; the act did nothing observable |
 | `mutations:minor` | a small DOM change (< 20 mutations) |
 | `mutations:major` | a large change (>= 20 mutations, or a URL change) |
-| `queries:settled` | TanStack queries went idle before the digest |
+| `queries:settled` | the app's async work (TanStack, React Router, project-adapter activity) went idle before the digest |
 | `url:/jobs/abc` | the route changed to this |
 | `errors:2!` | two console errors or 5xx fired during the act (listed below the line) |
 
@@ -76,7 +76,7 @@ fs page                                 # refs for everything interactable
 fs click 'JobRow[title~="JEGS"]'        # component expression, fiber-resolved
 fs click "Open Preview"                 # intent text; ambiguity returns candidates
 fs fill "parts search" "brake" --settled  # fill + outlast the debounce, return idle
-fs wait --settled                       # TanStack idle (the real signal, not a sleep)
+fs wait --settled                       # framework activity idle (the real signal, not a sleep)
 fs state 'PreviewJobOutputModal'        # props/hooks/state of the nearest fiber
 fs queries parts                        # TanStack cache entries whose key matches "parts"
 fs dismiss                              # Escape the top surface AND verify it left
@@ -240,6 +240,42 @@ herrings).
 V2 uses its own `control-v2.sock` and `daemon-v2.pid`, so it coexists with a V1
 daemon except for the shared browser profile. If both want the profile at once, V2
 refuses with the remedy above rather than fighting for it.
+
+## Adapters — built-in and project-local
+
+Three adapters are discovered with zero app cooperation: **TanStack Query** and
+**jotai** from the fiber tree, and **React Router** from the dev build's
+`window.__reactRouterDataRouter`. All three feed `--settled`; the router also
+answers `fs routes` from its live route table on non-Next apps and takes
+dispatch:
+
+```sh
+fs dispatch --adapter router '{"op":"list"}'                    # location, navigation, fetchers, loaderData
+fs dispatch --adapter router '{"op":"navigate","to":"/jobs"}'   # drain holds until loaders settle
+fs dispatch --adapter router '{"op":"revalidate"}'
+```
+
+A project adds its own by dropping `.fiber-snatcher/adapter.js` into the target
+repo (gitignored). The daemon injects it on every document, so registrations
+survive reloads:
+
+```js
+window.__fs.register("kit", {
+  getState: () => ({ /* whatever the agent should read */ }),
+  dispatch: (action) => ({ /* act on the app's own stores */ }),
+  activity: () => ({ pending: 0, started: 0 }), // optional: feeds --settled
+});
+```
+
+Names `queries`, `jotai`, and `router` are reserved for the built-ins. The file
+is capped at 512 KiB and fails in isolation — a broken adapter never takes the
+page down; `fs doctor`'s `project-adapter` probe flags present-but-silent files
+and its `activity` probe names sources whose `activity()` throws.
+
+Two snapshot details that pair with adapters: native `<dialog>` elements are
+tracked as surfaces (`surfaces:+dialog:<title>` in digests), and hidden file
+inputs — the dropzone pattern — are listed in `fs page` with `hidden: true` so
+`fs upload` has a discoverable target.
 
 ## What not to use it for
 

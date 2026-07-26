@@ -41,8 +41,9 @@ candidates:
 ```
 
 `fs page` mints a stable ref per interactable; verbs take that ref. `mutations:none`
-after a click is a dead click, a real signal. `queries:settled` means TanStack
-Query went idle before the digest was taken.
+after a click is a dead click, a real signal. `queries:settled` means the app's
+async work — TanStack queries, React Router navigations and fetchers, any project
+adapter's activity — went idle before the digest was taken.
 
 ## Install
 
@@ -104,9 +105,11 @@ inner React dev loop. What only this tool gives you:
 - **Component targeting through the fiber tree.** `fs click 'JobRow[title~="JEGS"]'`
   and `fs state 'PreviewJobOutputModal'` address elements by React component, not
   CSS. A generic driver has no view of the component tree.
-- **Waits on the framework's own signal.** `fs wait --settled` returns when TanStack
-  Query goes idle, using an adapter discovered from the fiber tree with zero app-side
-  code. `networkidle` is a proxy; query-settled is the real thing.
+- **Waits on the framework's own signal.** `fs wait --settled` returns when the
+  app's async work goes idle — TanStack Query, React Router navigations/fetchers —
+  via adapters discovered with zero app-side code, plus anything a project's own
+  `.fiber-snatcher/adapter.js` feeds in. `networkidle` is a proxy; activity-settled
+  is the real thing.
 - **A digest contract on every mutating verb.** You learn what an action did without a
   second call: mutation weight, surfaces opened/closed, focus, collection-count
   deltas, settled queries, new console errors. A dead click is visible instead of a

@@ -40,7 +40,9 @@ with refs, roles, labels, and component names. Pick a ref from it.
 ## Waiting — never sleep
 
 - Every verb auto-waits for actionability and settles before its digest.
-- `fs wait --settled` — TanStack queries idle (the real signal, not a proxy).
+- `fs wait --settled` — the app's async work idle: TanStack queries, React
+  Router navigations/fetchers, and any project adapter's `activity()` (the
+  real signal, not a proxy).
 - `fs fill --css "section input" "text" --settled` — post-condition flag that
   also outlasts debounce windows (fires-and-returns-idle or quiet-grace).
 - `fs wait --text "Loaded"` · `--gone <target>` · `--url <sub>` ·
@@ -52,7 +54,10 @@ with refs, roles, labels, and component names. Pick a ref from it.
 - Drive: `click hover dblclick rclick drag scroll type chord press fill select
   upload paste resize dismiss` (alias `close` — verifies the surface LEFT).
 - Observe: `page state shoot look queries atoms count journal routes remount`.
-- State: `dispatch` (adapter actions; TanStack + jotai are auto-discovered).
+- State: `dispatch` (adapter actions; TanStack + jotai + React Router are
+  auto-discovered; a project registers its own via `.fiber-snatcher/adapter.js`
+  — `window.__fs.register(name, {getState, dispatch, activity?})`, names
+  `queries`/`jotai`/`router` reserved).
 - Network: `mock unmock throttle wait-call watch`.
 - Flows: `macro` (save/list/run/from-journal), `session` (goal + expects),
   `probe` (saved eval snippets). Store: `~/.claude/fiber-actions/<repo-key>/`.

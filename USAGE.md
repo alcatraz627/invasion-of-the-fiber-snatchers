@@ -4,6 +4,12 @@ Fiber Snatcher scaffolds a `.fiber-snatcher/` directory but **never modifies you
 
 All insertions are dev-only (gated on `process.env.NODE_ENV === "development"`). None ship to production.
 
+> **V2 coexistence:** this page describes the frozen V1 wiring (`window.__snatcher__`,
+> manual adapter registration). V2 (`fs`) needs none of it — adapters are discovered or
+> loaded from `.fiber-snatcher/adapter.js` (see `docs/DRIVING.md`). The V1 CLI's
+> `stop` / `status` / `clean` do see a V2 daemon: `status` reports `RUNNING_V2`, `stop`
+> terminates it cleanly.
+
 ## 0. One-time: install the CLI globally
 
 ```sh
