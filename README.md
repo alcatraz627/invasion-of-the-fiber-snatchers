@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="Invasion of the Fiber Snatchers — a local React dev-app driver for coding agents" width="100%"/>
+  <img src=".github/readme/banner.svg" alt="invasion-of-the-fiber-snatchers banner: Drive-in double feature" width="100%">
 </p>
 
-# Fiber Snatcher
+# <img src=".github/readme/favicon.svg" alt="" width="32" height="32"> Fiber Snatcher
 
 > *An agent-first driver for your local React dev app.*
 
@@ -19,6 +19,13 @@ but blind, mechanical but diligent, and pays a real cost for every wasted round
 trip. So every action returns what changed without a second call, waits and
 retries live inside the action, and an ambiguous target comes back as a ranked
 candidate list rather than a silent first-match.
+
+<details>
+<summary>Riddle answer</summary>
+
+E_TARGET_AMBIGUOUS: an ambiguous target returns candidate refs instead of a silent first match, so --nth is never a blind guess.
+
+</details>
 
 ## 30-second demo
 
@@ -96,6 +103,10 @@ Targeting accepts a ref (`e7.k3f2`), intent text (`"Export"`), a fiber component
 expression (`'JobRow[title~="JEGS"]'`), or CSS (`--css '.toolbar button' --nth 1`).
 Ambiguity always returns the candidate list with refs, so `--nth` is never a blind
 guess.
+
+<p align="center">
+  <img src=".github/readme/art-1.svg" alt="invasion-of-the-fiber-snatchers artwork" width="100%">
+</p>
 
 ## How it differs from Playwright MCP and Chrome DevTools MCP
 
